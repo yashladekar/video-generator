@@ -1,0 +1,170 @@
+enum ProviderCategory {
+  LLM
+  RESEARCH
+  TTS
+  IMAGE
+  IMAGE_TO_VIDEO
+  TEXT_TO_VIDEO
+  MUSIC
+  STORAGE
+  PUBLISHING
+}
+
+enum CostType {
+  ESTIMATE
+  ACTUAL
+  ADJUSTMENT
+}
+
+enum BudgetStatus {
+  ACTIVE
+  CLOSED
+}
+
+model UserSettings {
+  id                     String @id @default(cuid())
+  userId                 String @unique
+  user                   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  defaultLanguage        String @default("en")
+  defaultTone            String?
+  defaultVoice           String?
+  defaultSubtitleStyle   String @default("bold")
+  defaultVisualStyle     String @default("cinematic")
+  defaultMusicMood       String @default("ambient")
+  monthlyBudgetInrPaise  Int    @default(50000)
+  maxCostPerVideoInrPaise Int   @default(5000)
+  maxHostedVideoCalls    Int    @default(2)
+  maxRetries             Int    @default(3)
+  reservePercent         Int    @default(15)
+  usdToInrRate           Float  @default(88)
+  taxPercent             Float  @default(0)
+  feePercent             Float  @default(0)
+  dailyLimit             Int    @default(1)
+  timezone               String @default("Asia/Kolkata")
+  localOnly              Boolean @default(false)
+  autoFallback           Boolean @default(true)
+  preferredLlmProvider   String?
+  preferredTtsProvider   String?
+  preferredVisualProvider String?
+  preferredVideoProvider String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
+model ProviderConfiguration {
+  id               String @id @default(cuid())
+  userId           String
+  user             User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category         ProviderCategory
+  provider         String
+  label            String?
+  enabled          Boolean @default(true)
+  isDefault        Boolean @default(false)
+  config           Json?
+  encryptedSecret  String?
+  secretLast4      String?
+  lastTestedAt     DateTime?
+  lastTestStatus   String?
+  lastError        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([userId, category, provider])
+  @@index([userId, category, enabled])
+}
+
+model ProviderPricing {
+  id           String @id @default(cuid())
+  provider     String
+  model        String
+  category     ProviderCategory
+  unit         String
+  unitPriceUsd Float
+  currency     String @default("USD")
+  sourceUrl    String?
+  verifiedAt   DateTime?
+  active       Boolean @default(true)
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([provider, model, unit])
+  @@index([provider, category, active])
+}
+
+model UsageRecord {
+  id                    String @id @default(cuid())
+  userId                String
+  user                  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId             String?
+  project               Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  jobId                 String?
+  job                   GenerationJob? @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  stepId                String?
+  step                  GenerationStep? @relation(fields: [stepId], references: [id], onDelete: SetNull)
+  provider              String
+  category              ProviderCategory
+  model                 String?
+  costType              CostType
+  estimatedCostMicroUsd Int   @default(0)
+  actualCostMicroUsd    Int?
+  estimatedCostInrPaise Int   @default(0)
+  actualCostInrPaise    Int?
+  inputUnits            Float?
+  outputUnits           Float?
+  unit                  String?
+  providerRequestId     String?
+  metadata              Json?
+  createdAt             DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([jobId])
+}
+
+model Budget {
+  id                String @id @default(cuid())
+  userId            String
+  user              User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  periodStart       DateTime
+  periodEnd         DateTime
+  amountInrPaise    Int
+  reservedInrPaise  Int      @default(0)
+  spentInrPaise     Int      @default(0)
+  status            BudgetStatus @default(ACTIVE)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([userId, periodStart])
+  @@index([userId, periodEnd])
+}
+
+model AuditLog {
+  id         String @id @default(cuid())
+  userId     String?
+  user       User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model Notification {
+  id        String @id @default(cuid())
+  userId    String
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt, createdAt])
+}

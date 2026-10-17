@@ -1,0 +1,180 @@
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum StepType {
+  VALIDATE
+  RESEARCH
+  SCRIPT
+  SCENES
+  NARRATION
+  VISUALS
+  AI_VIDEO
+  SUBTITLES
+  MUSIC
+  RENDER
+  VALIDATE_OUTPUT
+  FINALIZE
+  PUBLISH
+}
+
+enum StepStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+enum ProviderRequestStatus {
+  SUBMITTED
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  UNKNOWN
+}
+
+enum RenderKind {
+  PREVIEW
+  FINAL
+}
+
+enum RenderStatus {
+  QUEUED
+  RENDERING
+  COMPLETED
+  FAILED
+}
+
+model GenerationJob {
+  id               String @id @default(cuid())
+  projectId        String
+  project          Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId           String
+  user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scriptId         String?
+  script           Script? @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  kind             String    @default("GENERATE")
+  targetSceneId    String?
+  metadata         Json?
+  status           JobStatus @default(QUEUED)
+  currentStep      StepType?
+  progress         Int       @default(0)
+  attempt          Int       @default(0)
+  maxAttempts      Int       @default(4)
+  idempotencyKey   String
+  bullJobId        String?
+  cancelRequested  Boolean   @default(false)
+  errorCode        String?
+  errorClass       String?
+  errorMessage     String?
+  estimatedCostInrPaise Int  @default(0)
+  actualCostInrPaise    Int  @default(0)
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  steps            GenerationStep[]
+  providerRequests ProviderRequest[]
+  usageRecords     UsageRecord[]
+  renderedVideos   RenderedVideo[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([projectId, createdAt])
+  @@index([status, createdAt])
+}
+
+model GenerationStep {
+  id                String @id @default(cuid())
+  jobId             String
+  job               GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type              StepType
+  attempt           Int      @default(1)
+  status            StepStatus @default(PENDING)
+  orderIndex        Int
+  startedAt         DateTime?
+  completedAt       DateTime?
+  durationMs        Int?
+  input             Json?
+  output            Json?
+  errorCode         String?
+  errorClass        String?
+  errorMessage      String?
+  providerRequestId String?
+  costInrPaise      Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  usageRecords      UsageRecord[]
+
+  @@unique([jobId, type, attempt])
+  @@index([jobId, orderIndex])
+}
+
+model ProviderRequest {
+  id                    String @id @default(cuid())
+  userId                String
+  user                  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId             String?
+  project               Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  jobId                 String?
+  job                   GenerationJob? @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  provider              String
+  model                 String?
+  category              ProviderCategory
+  idempotencyKey        String
+  providerRequestId     String?
+  status                ProviderRequestStatus @default(SUBMITTED)
+  request               Json?
+  response              Json?
+  estimatedCostMicroUsd Int   @default(0)
+  actualCostMicroUsd    Int?
+  estimatedCostInrPaise Int   @default(0)
+  actualCostInrPaise    Int?
+  errorCode             String?
+  errorMessage          String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([userId, idempotencyKey])
+  @@index([provider, providerRequestId])
+  @@index([status, createdAt])
+}
+
+model RenderedVideo {
+  id               String @id @default(cuid())
+  projectId        String
+  project          Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  jobId            String?
+  job              GenerationJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  scriptId         String?
+  script           Script? @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  userId           String
+  user             User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind             RenderKind @default(FINAL)
+  status           RenderStatus @default(QUEUED)
+  videoAssetId     String
+  videoAsset       MediaAsset @relation("RenderedVideoAsset", fields: [videoAssetId], references: [id], onDelete: Cascade)
+  thumbnailAssetId String?
+  thumbnailAsset   MediaAsset? @relation("RenderedThumbnailAsset", fields: [thumbnailAssetId], references: [id], onDelete: SetNull)
+  durationSeconds  Float?
+  width            Int?
+  height           Int?
+  fps              Float?
+  fileSizeBytes    Int?
+  validation       Json?
+  isApproved       Boolean @default(false)
+  approvedAt       DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  publishingJobs   PublishingJob[]
+
+  @@index([projectId, kind, createdAt])
+  @@index([userId, createdAt])
+}

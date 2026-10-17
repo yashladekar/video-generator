@@ -1,0 +1,74 @@
+enum PublishingPlatform {
+  YOUTUBE
+  INSTAGRAM_REELS
+  TIKTOK
+  MANUAL
+}
+
+enum PublishingStatus {
+  DRAFT
+  SCHEDULED
+  UPLOADING
+  PUBLISHED
+  FAILED
+  CANCELLED
+  EXPORTED
+  NEEDS_ATTENTION
+}
+
+model PublishingAccount {
+  id                   String @id @default(cuid())
+  userId               String
+  user                 User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform             PublishingPlatform
+  accountName          String?
+  externalAccountId    String
+  encryptedCredentials String
+  scopes               String[]
+  tokenExpiresAt       DateTime?
+  status               String @default("CONNECTED")
+  metadata             Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  publishingJobs       PublishingJob[]
+
+  @@unique([userId, platform, externalAccountId])
+  @@index([userId, platform])
+}
+
+model PublishingJob {
+  id                  String @id @default(cuid())
+  userId              String
+  user                User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId           String
+  project             Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  renderedVideoId     String
+  renderedVideo       RenderedVideo @relation(fields: [renderedVideoId], references: [id], onDelete: Cascade)
+  publishingAccountId String?
+  publishingAccount   PublishingAccount? @relation(fields: [publishingAccountId], references: [id], onDelete: SetNull)
+  platform            PublishingPlatform
+  status              PublishingStatus @default(DRAFT)
+  title               String
+  caption             String
+  hashtags            String[]
+  privacyStatus       String @default("private")
+  bullJobId           String?
+  scheduledAt         DateTime?
+  metadata            Json?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  externalPostId      String?
+  externalUrl         String?
+  errorCode           String?
+  errorMessage        String?
+  attempt             Int @default(0)
+  maxAttempts         Int @default(3)
+  idempotencyKey      String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, status, scheduledAt])
+  @@index([projectId, createdAt])
+}

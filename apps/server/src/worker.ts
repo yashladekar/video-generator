@@ -1,0 +1,90 @@
+import { Worker } from "bullmq";
+
+import { runGenerationJob } from "@video-generator/api/pipeline/runner";
+import { runPublishingJob } from "@video-generator/api/publishing/runner";
+
+import { createWorkerContext } from "./context";
+import { ENV } from "./env.server";
+import { createWorkerConnection } from "./queue";
+import { db, logger } from "./services";
+
+const concurrency = Math.max(1, Number(ENV.WORKER_CONCURRENCY ?? 1));
+
+const generationWorker = new Worker(
+  "generation",
+  async (job) => {
+    const jobId = job.data?.jobId as string | undefined;
+    if (!jobId) throw new Error("Generation job data is missing jobId");
+    await runGenerationJob({
+      ctx: createWorkerContext(jobId),
+      jobId,
+      signal: AbortSignal.timeout(45 * 60 * 1000),
+    });
+  },
+  {
+    connection: createWorkerConnection(),
+    concurrency,
+    lockDuration: 15 * 60 * 1000,
+  },
+);
+
+const publishingWorker = new Worker(
+  "publishing",
+  async (job) => {
+    const jobId = job.data?.jobId as string | undefined;
+    if (!jobId) throw new Error("Publishing job data is missing jobId");
+    await runPublishingJob({
+      ctx: createWorkerContext(jobId),
+      jobId,
+    });
+  },
+  {
+    connection: createWorkerConnection(),
+    concurrency: Math.min(2, concurrency),
+    lockDuration: 20 * 60 * 1000,
+  },
+);
+
+generationWorker.on("completed", (job) => {
+  logger.info({ bullJobId: job.id }, "generation job completed");
+});
+generationWorker.on("failed", (job, error) => {
+  logger.error(
+    { bullJobId: job?.id, error: error.message },
+    "generation job failed",
+  );
+});
+generationWorker.on("error", (error) => {
+  logger.error({ error: error.message }, "generation worker error");
+});
+
+publishingWorker.on("completed", (job) => {
+  logger.info({ bullJobId: job.id }, "publishing job completed");
+});
+publishingWorker.on("failed", (job, error) => {
+  logger.error(
+    { bullJobId: job?.id, error: error.message },
+    "publishing job failed",
+  );
+});
+publishingWorker.on("error", (error) => {
+  logger.error({ error: error.message }, "publishing worker error");
+});
+
+async function shutdown(signal: string) {
+  logger.info({ signal }, "shutting down worker");
+  await Promise.allSettled([
+    generationWorker.close(),
+    publishingWorker.close(),
+    db.$disconnect(),
+  ]);
+  process.exit(0);
+}
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+logger.info(
+  { concurrency },
+  "worker started for generation and publishing queues",
+);

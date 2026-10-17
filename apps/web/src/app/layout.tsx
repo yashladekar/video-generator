@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import "../index.css";
-import Header from "@/components/header";
 import Providers from "@/components/providers";
 
 const geistSans = Geist({
@@ -16,8 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "video-generator",
-  description: "video-generator",
+  title: "ReelForge — AI Faceless Reels",
+  description:
+    "Generate, edit, render, and publish faceless vertical videos with local-first processing and strict budget controls.",
 };
 
 export default function RootLayout({
@@ -27,13 +27,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <Providers>
-          <div className="grid grid-rows-[auto_1fr] h-svh">
-            <Header />
-            {children}
-          </div>
-        </Providers>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} min-h-svh antialiased`}
+      >
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

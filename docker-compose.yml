@@ -1,6 +1,134 @@
 name: video-generator
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: video_generator
+      POSTGRES_PASSWORD: video_generator
+      POSTGRES_DB: video_generator
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U video_generator -d video_generator"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+      secrets:
+        - web_env
+        - server_env
+    env_file:
+      - path: apps/server/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://video_generator:video_generator@postgres:5432/video_generator?schema=public
+      REDIS_URL: redis://redis:6379
+      MEDIA_ROOT: /data/media
+      PUBLIC_API_URL: http://localhost:3000
+    command: ["pnpm", "--filter", "@video-generator/db", "exec", "prisma", "migrate", "deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+      secrets:
+        - web_env
+        - server_env
+    init: true
+    ports:
+      - "3000:3000"
+    env_file:
+      - path: apps/server/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://video_generator:video_generator@postgres:5432/video_generator?schema=public
+      REDIS_URL: redis://redis:6379
+      MEDIA_ROOT: /data/media
+      PUBLIC_API_URL: http://localhost:3000
+      CORS_ORIGIN: http://localhost:3001
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      FFPROBE_PATH: /usr/bin/ffprobe
+    volumes:
+      - media_data:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+      secrets:
+        - web_env
+        - server_env
+    init: true
+    command: ["node", "dist/worker.mjs"]
+    env_file:
+      - path: apps/server/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://video_generator:video_generator@postgres:5432/video_generator?schema=public
+      REDIS_URL: redis://redis:6379
+      MEDIA_ROOT: /data/media
+      PUBLIC_API_URL: http://localhost:3000
+      CORS_ORIGIN: http://localhost:3001
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      FFPROBE_PATH: /usr/bin/ffprobe
+      WORKER_CONCURRENCY: "1"
+    volumes:
+      - media_data:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   web:
     build:
       context: .
@@ -36,34 +164,10 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  server:
-    build:
-      context: .
-      dockerfile: apps/server/Dockerfile
-      secrets:
-        - web_env
-        - server_env
-    init: true
-    ports:
-      - "3000:3000"
-    env_file:
-      - path: apps/server/.env
-        required: false
-    environment:
-      CORS_ORIGIN: http://localhost:3001
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://localhost:3000/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    restart: unless-stopped
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:
 
 # BuildKit makes these available only while install/build commands run.
 secrets:

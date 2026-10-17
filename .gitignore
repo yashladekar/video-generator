@@ -47,6 +47,10 @@ lerna-debug.log*
 .alchemy
 .vercel
 
+# Media and uploads
+apps/server/storage
+storage
+
 # Testing
 coverage
 .nyc_output

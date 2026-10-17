@@ -9,6 +9,20 @@ model User {
   sessions      Session[]
   accounts      Account[]
 
+  settings           UserSettings?
+  projects           Project[]
+  mediaAssets        MediaAsset[]
+  generationJobs     GenerationJob[]
+  renderedVideos     RenderedVideo[]
+  providerConfigs    ProviderConfiguration[]
+  providerRequests   ProviderRequest[]
+  usageRecords       UsageRecord[]
+  budgets            Budget[]
+  publishingAccounts PublishingAccount[]
+  publishingJobs     PublishingJob[]
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+
   @@unique([email])
   @@map("user")
 }

@@ -1,0 +1,228 @@
+enum ProjectStatus {
+  DRAFT
+  CONFIGURED
+  QUEUED
+  GENERATING
+  COMPLETED
+  FAILED
+  ARCHIVED
+}
+
+enum ScriptStatus {
+  DRAFT
+  APPROVED
+  SUPERSEDED
+}
+
+enum VisualType {
+  IMAGE_ANIMATION
+  STOCK_IMAGE
+  STOCK_VIDEO
+  PROCEDURAL
+  AI_IMAGE
+  AI_VIDEO
+}
+
+enum SceneStatus {
+  PLANNED
+  ASSETS_READY
+  READY
+  FAILED
+}
+
+enum AssetKind {
+  REFERENCE
+  IMAGE
+  VIDEO
+  CLIP
+  NARRATION
+  MUSIC
+  SUBTITLE
+  THUMBNAIL
+  FINAL_VIDEO
+  OTHER
+}
+
+enum AssetSource {
+  LOCAL
+  UPLOAD
+  PEXELS
+  FAL
+  WAVESPEED
+  COMFYUI
+  PROCEDURAL
+  MUSIC_GENERATOR
+  OTHER
+}
+
+enum AssetStatus {
+  PENDING
+  READY
+  FAILED
+  DELETED
+}
+
+model Project {
+  id      String @id @default(cuid())
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title   String
+  topic   String
+  niche   String?
+  targetAudience String?
+  objective      String?
+  language       String  @default("en")
+  tone           String?
+  cta            String?
+  status         ProjectStatus @default(DRAFT)
+  isSample       Boolean       @default(false)
+  durationSeconds Int          @default(60)
+  aspectRatio     String       @default("9:16")
+  resolution      String       @default("1080p")
+  narrationStyle  String       @default("conversational")
+  voice           String?
+  subtitleStyle   String       @default("bold")
+  visualStyle     String       @default("cinematic")
+  musicMood       String       @default("ambient")
+  captionPosition String       @default("bottom")
+  musicVolume     Float        @default(0.15)
+  platform        String       @default("YOUTUBE")
+  estimatedCostInrPaise Int   @default(0)
+  actualCostInrPaise    Int   @default(0)
+  thumbnailAssetId String?   @unique
+  thumbnailAsset   MediaAsset? @relation("ProjectThumbnail", fields: [thumbnailAssetId], references: [id], onDelete: SetNull)
+  archivedAt       DateTime?
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  brief            ContentBrief?
+  scripts          Script[]
+  assets           MediaAsset[]         @relation("ProjectAssets")
+  generationJobs   GenerationJob[]
+  providerRequests ProviderRequest[]
+  renderedVideos   RenderedVideo[]
+  publishingJobs   PublishingJob[]
+  usageRecords     UsageRecord[]
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@index([deletedAt])
+}
+
+model ContentBrief {
+  id               String @id @default(cuid())
+  projectId        String @unique
+  project          Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  topic            String
+  targetAudience   String?
+  objective        String?
+  niche            String?
+  language         String  @default("en")
+  tone             String?
+  style            String?
+  callToAction     String?
+  referenceText    String?
+  referenceAssets  Json?
+  researchEnabled  Boolean @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model Script {
+  id                     String @id @default(cuid())
+  projectId              String
+  project                Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version                Int     @default(1)
+  status                 ScriptStatus @default(DRAFT)
+  title                  String
+  hook                   String?
+  targetDurationSeconds  Int
+  aspectRatio            String  @default("9:16")
+  language               String  @default("en")
+  provider               String
+  model                  String?
+  researchSummary        String?
+  researchSources        Json?
+  rawResponse            Json?
+  validationErrors       Json?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  scenes          Scene[]
+  generationJobs  GenerationJob[]
+  renderedVideos  RenderedVideo[]
+
+  @@unique([projectId, version])
+  @@index([projectId, createdAt])
+}
+
+model Scene {
+  id                String @id @default(cuid())
+  scriptId          String
+  script            Script @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  sceneNumber       Int
+  orderIndex        Int
+  durationSeconds   Float
+  startSeconds      Float  @default(0)
+  endSeconds        Float  @default(0)
+  narration         String
+  visualDescription String
+  visualType        VisualType @default(PROCEDURAL)
+  subtitleText      String
+  transition        String @default("cut")
+  motion            String?
+  status            SceneStatus @default(PLANNED)
+  visualAssetId     String?
+  visualAsset       MediaAsset? @relation("SceneVisual", fields: [visualAssetId], references: [id], onDelete: SetNull)
+  narrationAssetId  String?
+  narrationAsset    MediaAsset? @relation("SceneNarration", fields: [narrationAssetId], references: [id], onDelete: SetNull)
+  clipAssetId       String?
+  clipAsset         MediaAsset? @relation("SceneClip", fields: [clipAssetId], references: [id], onDelete: SetNull)
+  providerRequestId String?
+  metadata          Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([scriptId, sceneNumber])
+  @@index([scriptId, orderIndex])
+}
+
+model MediaAsset {
+  id                String @id @default(cuid())
+  userId            String
+  user              User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId         String?
+  project           Project? @relation("ProjectAssets", fields: [projectId], references: [id], onDelete: Cascade)
+  kind              AssetKind
+  source            AssetSource
+  status            AssetStatus @default(PENDING)
+  storageKey        String @unique
+  originalName      String?
+  mimeType          String
+  sizeBytes         Int    @default(0)
+  width             Int?
+  height            Int?
+  durationSeconds   Float?
+  checksum          String?
+  cacheKey          String? @unique
+  provider          String?
+  providerModel     String?
+  providerRequestId String?
+  attribution       String?
+  metadata          Json?
+  expiresAt         DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  scenesUsingAsVisual     Scene[] @relation("SceneVisual")
+  scenesUsingAsNarration  Scene[] @relation("SceneNarration")
+  scenesUsingAsClip       Scene[] @relation("SceneClip")
+  renderedVideos          RenderedVideo[] @relation("RenderedVideoAsset")
+  renderedThumbnails      RenderedVideo[] @relation("RenderedThumbnailAsset")
+  projectThumbnailFor     Project? @relation("ProjectThumbnail")
+
+  @@index([projectId, kind])
+  @@index([userId, createdAt])
+  @@index([checksum])
+}

@@ -3,20 +3,34 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./providers/storage": "./src/providers/storage/index.ts",
     "./*": "./src/*.ts"
   },
   "scripts": {
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "@ffprobe-installer/ffprobe": "^2.1.2",
     "@trpc/client": "catalog:",
     "@trpc/server": "catalog:",
     "@video-generator/auth": "workspace:*",
     "@video-generator/db": "workspace:*",
+    "date-fns": "^4.4.0",
+    "date-fns-tz": "^3.2.0",
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
+    "pino": "^10.4.0",
+    "sharp": "^0.35.5",
+    "text-to-svg": "^3.1.5",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@video-generator/config": "workspace:*",
-    "typescript": "catalog:"
+    "@vitest/coverage-v8": "^5.0.5",
+    "typescript": "catalog:",
+    "vitest": "^5.0.5"
   }
 }
