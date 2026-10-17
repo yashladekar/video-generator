@@ -1,0 +1,22 @@
+{
+  "name": "@video-generator/api",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@trpc/client": "catalog:",
+    "@trpc/server": "catalog:",
+    "@video-generator/auth": "workspace:*",
+    "@video-generator/db": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@video-generator/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}
