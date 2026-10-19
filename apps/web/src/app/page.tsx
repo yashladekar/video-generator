@@ -75,12 +75,14 @@ export default function LandingPage() {
           >
             Sign in
           </Link>
-          <Link href={primaryHref}>
-            <Button size="sm" className="gap-1.5">
-              {primaryLabel}
-              <ArrowRight className="size-3.5" />
-            </Button>
-          </Link>
+          <Button
+            size="sm"
+            className="gap-1.5"
+            render={<Link href={primaryHref} />}
+          >
+            {primaryLabel}
+            <ArrowRight className="size-3.5" />
+          </Button>
         </div>
       </header>
 
@@ -112,21 +114,22 @@ export default function LandingPage() {
               monthly budget you control.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
-              <Link href={primaryHref}>
-                <Button size="lg" className="gap-2 bg-white text-black hover:bg-white/90">
-                  <Play className="size-4" />
-                  {primaryLabel}
-                </Button>
-              </Link>
-              <Link href="#how-it-works">
-                <Button
-                  size="lg"
-                  variant="outline"
-                  className="border-white/20 bg-transparent text-white hover:bg-white/10"
-                >
-                  See the pipeline
-                </Button>
-              </Link>
+              <Button
+                size="lg"
+                className="gap-2 bg-white text-black hover:bg-white/90"
+                render={<Link href={primaryHref} />}
+              >
+                <Play className="size-4" />
+                {primaryLabel}
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                className="border-white/20 bg-transparent text-white hover:bg-white/10"
+                render={<Link href="#how-it-works" />}
+              >
+                See the pipeline
+              </Button>
             </div>
             <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-[11px] uppercase tracking-wider text-white/40">
               <span>Postgres + Redis + BullMQ</span>
@@ -202,12 +205,13 @@ export default function LandingPage() {
               provider calls are recorded, and unknown outcomes are never
               retried blindly.
             </p>
-            <Link href={primaryHref} className="mt-6 inline-block">
-              <Button className="gap-1.5">
-                <Sparkles className="size-4" />
-                {primaryLabel}
-              </Button>
-            </Link>
+            <Button
+              className="mt-6 gap-1.5"
+              render={<Link href={primaryHref} />}
+            >
+              <Sparkles className="size-4" />
+              {primaryLabel}
+            </Button>
           </div>
           <ol className="grid gap-3 sm:grid-cols-2">
             {STEPS.map((step, index) => (

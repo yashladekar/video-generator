@@ -74,6 +74,58 @@ type SceneLike = {
   narrationAsset?: { url: string } | null;
 };
 
+type StudioProject = {
+  id: string;
+  title: string;
+  status: string;
+  durationSeconds: number;
+  resolution: string;
+  narrationStyle: string;
+  visualStyle: string;
+  musicMood: string;
+  musicVolume: number;
+  captionPosition: string;
+  subtitleStyle: string;
+  actualCostInrPaise: number;
+  estimatedCostInrPaise: number;
+  updatedAt: string | Date;
+};
+
+type StudioJob = {
+  id: string;
+  kind: string;
+  status: string;
+  currentStep: string | null;
+  progress: number;
+  errorMessage: string | null;
+  createdAt: string;
+};
+
+type StudioRender = {
+  id: string;
+  kind: string;
+  status: string;
+  isApproved: boolean;
+  durationSeconds: number | null;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  validation: unknown;
+  videoAsset: { url: string };
+  thumbnailAsset: { url: string } | null;
+  createdAt: string;
+};
+
+type StudioData = {
+  project: StudioProject;
+  script: { id: string; scenes: SceneLike[] } | null;
+  assets: unknown[];
+  renderedVideos: StudioRender[];
+  jobs: StudioJob[];
+  publishJobs: unknown[];
+  subtitleAsset: { url: string } | null;
+};
+
 const VISUAL_TYPES = [
   "PROCEDURAL",
   "IMAGE_ANIMATION",
@@ -255,8 +307,8 @@ export default function StudioPage() {
   );
   const budget = useQuery(trpc.budget.get.queryOptions());
 
-  const data = studio.data;
-  const scenes = (data?.script?.scenes ?? []) as SceneLike[];
+  const data = studio.data as unknown as StudioData | undefined;
+  const scenes = data?.script?.scenes ?? [];
   const selectedScene = scenes.find((scene) => scene.id === selectedSceneId) ?? null;
   const activeJob = data?.jobs.find((job) =>
     ["QUEUED", "RUNNING"].includes(job.status),
@@ -322,104 +374,53 @@ export default function StudioPage() {
     queryClient.invalidateQueries({ queryKey: trpc.projects.get.queryKey({ projectId }) });
   };
 
+  async function runAction<T>(
+    action: () => Promise<T>,
+    successMessage: string,
+  ): Promise<T | undefined> {
+    try {
+      const result = await action();
+      toast.success(successMessage);
+      invalidate();
+      return result;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Action failed");
+      return undefined;
+    }
+  }
+
   const previewMutation = useMutation(
-    trpc.generation.preview.mutationOptions({
-      onSuccess: () => {
-        toast.success("Preview render queued");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.generation.preview.mutationOptions(),
   );
   const finalMutation = useMutation(
-    trpc.generation.final.mutationOptions({
-      onSuccess: () => {
-        toast.success("Final render queued");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.generation.final.mutationOptions(),
   );
   const updateScene = useMutation(
-    trpc.studio.updateScene.mutationOptions({
-      onSuccess: () => {
-        toast.success("Scene saved");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.studio.updateScene.mutationOptions(),
   );
   const reorder = useMutation(
-    trpc.studio.reorderScenes.mutationOptions({
-      onSuccess: () => {
-        toast.success("Scene order saved");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.studio.reorderScenes.mutationOptions(),
   );
   const regenerateScene = useMutation(
-    trpc.studio.regenerateScene.mutationOptions({
-      onSuccess: () => {
-        toast.success("Scene regeneration queued");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.studio.regenerateScene.mutationOptions(),
   );
   const regenerateVoice = useMutation(
-    trpc.studio.regenerateVoiceover.mutationOptions({
-      onSuccess: () => {
-        toast.success("Voiceover regeneration queued");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.studio.regenerateVoiceover.mutationOptions(),
   );
   const replaceVisual = useMutation(
-    trpc.studio.replaceVisual.mutationOptions({
-      onSuccess: () => {
-        toast.success("Visual replaced");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.studio.replaceVisual.mutationOptions(),
   );
   const approve = useMutation(
-    trpc.studio.approveVideo.mutationOptions({
-      onSuccess: () => {
-        toast.success("Final render approved");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.studio.approveVideo.mutationOptions(),
   );
   const updateCaption = useMutation(
-    trpc.studio.updateCaptionStyle.mutationOptions({
-      onSuccess: () => {
-        toast.success("Caption style saved");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.studio.updateCaptionStyle.mutationOptions(),
   );
   const updateMusic = useMutation(
-    trpc.studio.updateMusic.mutationOptions({
-      onSuccess: () => {
-        toast.success("Music settings saved");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.studio.updateMusic.mutationOptions(),
   );
   const cancelJob = useMutation(
-    trpc.generation.cancel.mutationOptions({
-      onSuccess: () => {
-        toast.success("Cancellation requested");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.generation.cancel.mutationOptions(),
   );
 
   const sensors = useSensors(
@@ -434,10 +435,14 @@ export default function StudioPage() {
     if (oldIndex < 0 || newIndex < 0) return;
     const next = arrayMove(scenes, oldIndex, newIndex);
     if (projectId) {
-      reorder.mutate({
-        projectId,
-        sceneIds: next.map((scene) => scene.id),
-      });
+      void runAction(
+        () =>
+          reorder.mutateAsync({
+            projectId,
+            sceneIds: next.map((scene) => scene.id),
+          }),
+        "Scene order saved",
+      );
     }
   }
 
@@ -483,7 +488,12 @@ export default function StudioPage() {
         projectId,
         kind: "visual",
       });
-      replaceVisual.mutate({ sceneId: selectedScene.id, assetId: asset.id });
+      await replaceVisual.mutateAsync({
+        sceneId: selectedScene.id,
+        assetId: asset.id,
+      });
+      toast.success("Visual replaced");
+      invalidate();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Upload failed");
     } finally {
@@ -529,10 +539,14 @@ export default function StudioPage() {
               className="border-white/15 bg-white/5 text-white hover:bg-white/10"
               disabled={Boolean(activeJob) || previewMutation.isPending}
               onClick={() =>
-                previewMutation.mutate({
-                  projectId,
-                  idempotencyKey: crypto.randomUUID(),
-                })
+                void runAction(
+                  () =>
+                    previewMutation.mutateAsync({
+                      projectId,
+                      idempotencyKey: crypto.randomUUID(),
+                    }),
+                  "Preview render queued",
+                )
               }
             >
               <Play className="size-3.5" />
@@ -543,10 +557,14 @@ export default function StudioPage() {
               className="gap-1.5 bg-amber-400 text-black hover:bg-amber-300"
               disabled={Boolean(activeJob) || finalMutation.isPending}
               onClick={() =>
-                finalMutation.mutate({
-                  projectId,
-                  idempotencyKey: crypto.randomUUID(),
-                })
+                void runAction(
+                  () =>
+                    finalMutation.mutateAsync({
+                      projectId,
+                      idempotencyKey: crypto.randomUUID(),
+                    }),
+                  "Final render queued",
+                )
               }
             >
               <Film className="size-3.5" />
@@ -558,22 +576,29 @@ export default function StudioPage() {
                 size="sm"
                 className="border-white/15 bg-white/5 text-white hover:bg-white/10"
                 disabled={approved || approve.isPending}
-                onClick={() => approve.mutate({ renderedVideoId: selectedRender.id })}
+                onClick={() =>
+                  void runAction(
+                    () =>
+                      approve.mutateAsync({
+                        renderedVideoId: selectedRender.id,
+                      }),
+                    "Final render approved",
+                  )
+                }
               >
                 <CheckCircle2 className="size-3.5" />
                 {approved ? "Approved" : "Approve"}
               </Button>
             ) : null}
-            <Link href={`/publishing?project=${project.id}`}>
-              <Button
-                variant="outline"
-                size="sm"
-                className="border-white/15 bg-white/5 text-white hover:bg-white/10"
-              >
-                <Send className="size-3.5" />
-                Publish
-              </Button>
-            </Link>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-white/15 bg-white/5 text-white hover:bg-white/10"
+              render={<Link href={`/publishing?project=${project.id}`} />}
+            >
+              <Send className="size-3.5" />
+              Publish
+            </Button>
           </div>
         </div>
       </div>
@@ -585,9 +610,7 @@ export default function StudioPage() {
             title="No script yet"
             description="Generate a reel first. The Studio becomes available after the script and scenes are created."
             action={
-              <Link href={`/create`}>
-                <Button>Create a reel</Button>
-              </Link>
+              <Button render={<Link href="/create" />}>Create a reel</Button>
             }
           />
         </div>
@@ -643,10 +666,14 @@ export default function StudioPage() {
                       className="mt-1 bg-white text-black hover:bg-white/90"
                       disabled={Boolean(activeJob) || previewMutation.isPending}
                       onClick={() =>
-                        previewMutation.mutate({
-                          projectId,
-                          idempotencyKey: crypto.randomUUID(),
-                        })
+                        void runAction(
+                          () =>
+                            previewMutation.mutateAsync({
+                              projectId,
+                              idempotencyKey: crypto.randomUUID(),
+                            }),
+                          "Preview render queued",
+                        )
                       }
                     >
                       Render preview
@@ -731,7 +758,12 @@ export default function StudioPage() {
                     variant="ghost"
                     size="sm"
                     className="h-6 text-[10px] text-white/50 hover:text-white"
-                    onClick={() => cancelJob.mutate({ jobId: activeJob.id })}
+                    onClick={() =>
+                      void runAction(
+                        () => cancelJob.mutateAsync({ jobId: activeJob.id }),
+                        "Cancellation requested",
+                      )
+                    }
                   >
                     Cancel
                   </Button>
@@ -791,10 +823,14 @@ export default function StudioPage() {
                       className="border-white/15 bg-white/5 text-white hover:bg-white/10"
                       disabled={Boolean(activeJob)}
                       onClick={() =>
-                        regenerateVoice.mutate({
-                          sceneId: selectedScene.id,
-                          idempotencyKey: crypto.randomUUID(),
-                        })
+                        void runAction(
+                          () =>
+                            regenerateVoice.mutateAsync({
+                              sceneId: selectedScene.id,
+                              idempotencyKey: crypto.randomUUID(),
+                            }),
+                          "Voiceover regeneration queued",
+                        )
                       }
                     >
                       <RefreshCw className="size-3.5" />
@@ -806,11 +842,15 @@ export default function StudioPage() {
                       className="border-white/15 bg-white/5 text-white hover:bg-white/10"
                       disabled={Boolean(activeJob)}
                       onClick={() =>
-                        regenerateScene.mutate({
-                          sceneId: selectedScene.id,
-                          parts: ["visual"],
-                          idempotencyKey: crypto.randomUUID(),
-                        })
+                        void runAction(
+                          () =>
+                            regenerateScene.mutateAsync({
+                              sceneId: selectedScene.id,
+                              parts: ["visual"],
+                              idempotencyKey: crypto.randomUUID(),
+                            }),
+                          "Scene regeneration queued",
+                        )
                       }
                     >
                       <ImageIcon className="size-3.5" />
@@ -822,11 +862,15 @@ export default function StudioPage() {
                       className="border-white/15 bg-white/5 text-white hover:bg-white/10"
                       disabled={Boolean(activeJob)}
                       onClick={() =>
-                        regenerateScene.mutate({
-                          sceneId: selectedScene.id,
-                          parts: ["all"],
-                          idempotencyKey: crypto.randomUUID(),
-                        })
+                        void runAction(
+                          () =>
+                            regenerateScene.mutateAsync({
+                              sceneId: selectedScene.id,
+                              parts: ["all"],
+                              idempotencyKey: crypto.randomUUID(),
+                            }),
+                          "Scene regeneration queued",
+                        )
                       }
                     >
                       <Sparkles className="size-3.5" />
@@ -903,28 +947,32 @@ export default function StudioPage() {
                         size="sm"
                         disabled={updateScene.isPending}
                         onClick={() =>
-                          updateScene.mutate({
-                            sceneId: selectedScene.id,
-                            narration,
-                            subtitleText,
-                            durationSeconds: duration,
-                            transition: transition as "cut" | "fade",
-                            motion: (motion || undefined) as
-                              | "zoom_in"
-                              | "zoom_out"
-                              | "pan_left"
-                              | "pan_right"
-                              | "static"
-                              | undefined,
-                            visualType: visualType as
-                              | "IMAGE_ANIMATION"
-                              | "STOCK_IMAGE"
-                              | "STOCK_VIDEO"
-                              | "PROCEDURAL"
-                              | "AI_IMAGE"
-                              | "AI_VIDEO",
-                            visualDescription,
-                          })
+                          void runAction(
+                            () =>
+                              updateScene.mutateAsync({
+                                sceneId: selectedScene.id,
+                                narration,
+                                subtitleText,
+                                durationSeconds: duration,
+                                transition: transition as "cut" | "fade",
+                                motion: (motion || undefined) as
+                                  | "zoom_in"
+                                  | "zoom_out"
+                                  | "pan_left"
+                                  | "pan_right"
+                                  | "static"
+                                  | undefined,
+                                visualType: visualType as
+                                  | "IMAGE_ANIMATION"
+                                  | "STOCK_IMAGE"
+                                  | "STOCK_VIDEO"
+                                  | "PROCEDURAL"
+                                  | "AI_IMAGE"
+                                  | "AI_VIDEO",
+                                visualDescription,
+                              }),
+                            "Scene saved",
+                          )
                         }
                       >
                         Save scene
@@ -1015,11 +1063,22 @@ export default function StudioPage() {
                   className="mt-3 border-white/15 bg-white/5 text-white hover:bg-white/10"
                   disabled={updateCaption.isPending}
                   onClick={() =>
-                    updateCaption.mutate({
-                      projectId,
-                      style: captionStyle as "bold" | "clean" | "karaoke" | "minimal",
-                      position: captionPosition as "bottom" | "center" | "top",
-                    })
+                    void runAction(
+                      () =>
+                        updateCaption.mutateAsync({
+                          projectId,
+                          style: captionStyle as
+                            | "bold"
+                            | "clean"
+                            | "karaoke"
+                            | "minimal",
+                          position: captionPosition as
+                            | "bottom"
+                            | "center"
+                            | "top",
+                        }),
+                      "Caption style saved",
+                    )
                   }
                 >
                   Save caption style
@@ -1067,11 +1126,20 @@ export default function StudioPage() {
                   className="mt-3 border-white/15 bg-white/5 text-white hover:bg-white/10"
                   disabled={updateMusic.isPending}
                   onClick={() =>
-                    updateMusic.mutate({
-                      projectId,
-                      mood: musicMood as "ambient" | "cinematic" | "upbeat" | "lofi" | "none",
-                      volume: musicVolume,
-                    })
+                    void runAction(
+                      () =>
+                        updateMusic.mutateAsync({
+                          projectId,
+                          mood: musicMood as
+                            | "ambient"
+                            | "cinematic"
+                            | "upbeat"
+                            | "lofi"
+                            | "none",
+                          volume: musicVolume,
+                        }),
+                      "Music settings saved",
+                    )
                   }
                 >
                   Save music

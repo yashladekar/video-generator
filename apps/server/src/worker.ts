@@ -2,10 +2,11 @@ import { Worker } from "bullmq";
 
 import { runGenerationJob } from "@video-generator/api/pipeline/runner";
 import { runPublishingJob } from "@video-generator/api/publishing/runner";
+import { runRetentionCleanup } from "@video-generator/api/services/retention";
 
 import { createWorkerContext } from "./context";
 import { ENV } from "./env.server";
-import { createWorkerConnection } from "./queue";
+import { createWorkerConnection, redis } from "./queue";
 import { db, logger } from "./services";
 
 const concurrency = Math.max(1, Number(ENV.WORKER_CONCURRENCY ?? 1));
@@ -71,8 +72,42 @@ publishingWorker.on("error", (error) => {
   logger.error({ error: error.message }, "publishing worker error");
 });
 
+const RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const RETENTION_LOCK_KEY = "retention:cleanup:lock";
+
+async function runRetention() {
+  try {
+    const lock = await redis.set(
+      RETENTION_LOCK_KEY,
+      String(process.pid),
+      "EX",
+      60 * 60,
+      "NX",
+    );
+    if (lock !== "OK") return;
+    try {
+      const result = await runRetentionCleanup(
+        createWorkerContext("retention"),
+      );
+      logger.info(result, "retention cleanup completed");
+    } finally {
+      await redis.del(RETENTION_LOCK_KEY).catch(() => undefined);
+    }
+  } catch (error) {
+    logger.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      "retention cleanup failed",
+    );
+  }
+}
+
+const retentionTimer = setInterval(() => void runRetention(), RETENTION_INTERVAL_MS);
+retentionTimer.unref();
+void runRetention();
+
 async function shutdown(signal: string) {
   logger.info({ signal }, "shutting down worker");
+  clearInterval(retentionTimer);
   await Promise.allSettled([
     generationWorker.close(),
     publishingWorker.close(),

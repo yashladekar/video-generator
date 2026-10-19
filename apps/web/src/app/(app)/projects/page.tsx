@@ -192,12 +192,10 @@ export default function ProjectsPage() {
         title="Projects"
         description="Search, filter, open, duplicate, rename, archive, download, or delete your saved reels."
         actions={
-          <Link href="/create">
-            <Button className="gap-1.5">
-              <Plus className="size-4" />
-              Create New Reel
-            </Button>
-          </Link>
+          <Button className="gap-1.5" render={<Link href="/create" />}>
+            <Plus className="size-4" />
+            Create New Reel
+          </Button>
         }
       />
 
@@ -277,12 +275,10 @@ export default function ProjectsPage() {
           title="No projects match this view"
           description="Create a project or clear the filters. The default local pipeline is free."
           action={
-            <Link href="/create">
-              <Button className="gap-1.5">
-                <Plus className="size-4" />
-                Create New Reel
-              </Button>
-            </Link>
+            <Button className="gap-1.5" render={<Link href="/create" />}>
+              <Plus className="size-4" />
+              Create New Reel
+            </Button>
           }
         />
       ) : (
@@ -431,11 +427,14 @@ export default function ProjectsPage() {
                     </div>
                   </div>
                   {view === "list" ? (
-                    <Link href={`/studio/${project.id}`}>
-                      <Button variant="outline" size="sm" className="gap-1.5">
-                        Studio <ArrowRight className="size-3.5" />
-                      </Button>
-                    </Link>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5"
+                      render={<Link href={`/studio/${project.id}`} />}
+                    >
+                      Studio <ArrowRight className="size-3.5" />
+                    </Button>
                   ) : null}
                 </div>
               );

@@ -5,6 +5,7 @@ import type { ProviderCategory } from "@video-generator/db";
 import type { Context } from "../context";
 import { decryptSecret, encryptSecret, maskSecret } from "../lib/crypto";
 import { toJsonValue } from "../lib/json";
+import { runProcess } from "../lib/ffmpeg";
 import { getProviderDefinition, PROVIDER_CATALOG } from "../providers/catalog";
 import { fetchJson, joinUrl } from "../providers/http";
 import { configString, resolveProviderChain } from "../providers/resolve";
@@ -242,9 +243,26 @@ export async function testProvider(
           : { ok: false, message: "macOS say is only available on macOS" };
       }
       if (provider === "espeak-ng") {
-        return existsSync(configString(resolved, "binaryPath", "espeak-ng") ?? "")
-          ? { ok: true, message: "eSpeak NG is available" }
-          : { ok: false, message: "eSpeak NG binary was not found in this environment" };
+        const binary =
+          configString(resolved, "binaryPath", "espeak-ng") ?? "espeak-ng";
+        try {
+          const version = await runProcess(binary, ["--version"], {
+            timeoutMs: 5_000,
+          });
+          return {
+            ok: version.exitCode === 0,
+            message:
+              version.exitCode === 0
+                ? `eSpeak NG is available (${binary})`
+                : `eSpeak NG exited with code ${version.exitCode}`,
+          };
+        } catch {
+          return {
+            ok: false,
+            message:
+              "eSpeak NG binary was not found in this environment. Install it or use another TTS provider.",
+          };
+        }
       }
       if (provider === "piper") {
         const binary = configString(resolved, "binaryPath", ctx.env.PIPER_BIN) ?? "";
@@ -426,7 +444,7 @@ export async function detectCapabilities(ctx: Context) {
   capabilities.push({
     id: "ffmpeg",
     label: "FFmpeg",
-    available: Boolean(ctx.env.FFMPEG_PATH) || true,
+    available: true,
     detail: ctx.env.FFMPEG_PATH
       ? `Configured at ${ctx.env.FFMPEG_PATH}`
       : "Using the bundled ffmpeg-static binary in local development; Docker images use system FFmpeg.",

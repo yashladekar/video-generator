@@ -416,9 +416,9 @@ export default function CreateReelPage() {
         title="Create a reel"
         description="Brief the idea, configure the format, check the cost, then start a real background generation job."
         actions={
-          <Link href="/dashboard">
-            <Button variant="outline">Cancel</Button>
-          </Link>
+          <Button variant="outline" render={<Link href="/dashboard" />}>
+            Cancel
+          </Button>
         }
       />
 
@@ -593,25 +593,43 @@ export default function CreateReelPage() {
               <div className="flex justify-end">
                 <Button
                   className="gap-1.5"
-                  disabled={!canContinueBrief || createDraft.isPending}
+                  disabled={
+                    !canContinueBrief ||
+                    createDraft.isPending ||
+                    updateProject.isPending
+                  }
                   onClick={async () => {
                     try {
-                      const project = await createDraft.mutateAsync({
-                        brief: stateToBrief(state),
-                        config: stateToConfig(state),
-                        budget: stateToBudget(state),
-                      });
-                      setProjectId(project.id);
+                      if (projectId) {
+                        await updateProject.mutateAsync({
+                          projectId,
+                          title: state.title.trim(),
+                          brief: stateToBrief(state),
+                          config: stateToConfig(state),
+                        });
+                        toast.success("Brief updated");
+                      } else {
+                        const project = await createDraft.mutateAsync({
+                          brief: stateToBrief(state),
+                          config: stateToConfig(state),
+                          budget: stateToBudget(state),
+                        });
+                        setProjectId(project.id);
+                        toast.success("Draft project saved");
+                      }
                       setStep(1);
-                      toast.success("Draft project saved");
                     } catch (error) {
                       toast.error(
-                        error instanceof Error ? error.message : "Could not save draft",
+                        error instanceof Error
+                          ? error.message
+                          : "Could not save the brief",
                       );
                     }
                   }}
                 >
-                  {createDraft.isPending ? "Saving…" : "Save brief & continue"}
+                  {createDraft.isPending || updateProject.isPending
+                    ? "Saving…"
+                    : "Save brief & continue"}
                   <ArrowRight className="size-4" />
                 </Button>
               </div>
@@ -1178,12 +1196,14 @@ export default function CreateReelPage() {
                             </Button>
                           ) : null}
                           {jobData?.status === "SUCCEEDED" ? (
-                            <Link href={`/studio/${projectId}`}>
-                              <Button size="sm" className="gap-1.5">
-                                <Sparkles className="size-3.5" />
-                                Open Studio
-                              </Button>
-                            </Link>
+                            <Button
+                              size="sm"
+                              className="gap-1.5"
+                              render={<Link href={`/studio/${projectId}`} />}
+                            >
+                              <Sparkles className="size-3.5" />
+                              Open Studio
+                            </Button>
                           ) : null}
                         </div>
                       </div>
@@ -1220,15 +1240,19 @@ export default function CreateReelPage() {
                         </div>
                         {jobData?.status === "SUCCEEDED" ? (
                           <div className="mt-4 flex flex-wrap gap-2">
-                            <Link href={`/studio/${projectId}`}>
-                              <Button className="gap-1.5">
-                                <Sparkles className="size-4" />
-                                Preview & edit in Studio
-                              </Button>
-                            </Link>
-                            <Link href={`/projects/${projectId}`}>
-                              <Button variant="outline">Project details</Button>
-                            </Link>
+                            <Button
+                              className="gap-1.5"
+                              render={<Link href={`/studio/${projectId}`} />}
+                            >
+                              <Sparkles className="size-4" />
+                              Preview & edit in Studio
+                            </Button>
+                            <Button
+                              variant="outline"
+                              render={<Link href={`/projects/${projectId}`} />}
+                            >
+                              Project details
+                            </Button>
                           </div>
                         ) : null}
                       </div>
@@ -1241,9 +1265,12 @@ export default function CreateReelPage() {
                   <ArrowLeft className="size-4" />
                   Back
                 </Button>
-                <Link href="/dashboard">
-                  <Button variant="outline">Save for later</Button>
-                </Link>
+                <Button
+                  variant="outline"
+                  render={<Link href="/dashboard" />}
+                >
+                  Save for later
+                </Button>
               </div>
             </div>
           ) : null}

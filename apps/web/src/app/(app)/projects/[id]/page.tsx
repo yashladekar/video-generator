@@ -28,6 +28,75 @@ import {
 import { formatDate, formatInr, timeAgo, truncate } from "@/lib/format";
 import { trpc } from "@/utils/trpc";
 
+type ProjectDetail = {
+  id: string;
+  title: string;
+  topic: string;
+  niche: string | null;
+  targetAudience: string | null;
+  objective: string | null;
+  language: string;
+  tone: string | null;
+  cta: string | null;
+  status: string;
+  durationSeconds: number;
+  resolution: string;
+  platform: string;
+  estimatedCostInrPaise: number;
+  actualCostInrPaise: number;
+  createdAt: string;
+  brief: { researchEnabled: boolean } | null;
+  thumbnailAsset: { url: string } | null;
+  scripts: Array<{
+    provider: string;
+    scenes: Array<{
+      id: string;
+      sceneNumber: number;
+      durationSeconds: number;
+      visualType: string;
+      status: string;
+      narration: string;
+      visualDescription: string;
+    }>;
+  }>;
+  renderedVideos: Array<{
+    id: string;
+    kind: string;
+    status: string;
+    durationSeconds: number | null;
+    width: number | null;
+    height: number | null;
+    createdAt: string;
+    videoAsset: { url: string };
+    thumbnailAsset: { url: string } | null;
+  }>;
+  generationJobs: Array<{
+    id: string;
+    kind: string;
+    status: string;
+    progress: number;
+    currentStep: string | null;
+    errorMessage: string | null;
+    createdAt: string;
+  }>;
+  usageRecords: Array<{
+    id: string;
+    provider: string;
+    category: string;
+    model: string | null;
+    estimatedCostInrPaise: number;
+    actualCostInrPaise: number | null;
+    createdAt: string;
+  }>;
+  publishingJobs: Array<{
+    id: string;
+    platform: string;
+    status: string;
+    createdAt: string;
+    externalUrl: string | null;
+  }>;
+};
+
 export default function ProjectDetailPage() {
   const params = useParams<{ id: string }>();
   const projectId = Array.isArray(params.id) ? params.id[0] : params.id;
@@ -49,23 +118,39 @@ export default function ProjectDetailPage() {
   };
 
   const preview = useMutation(
-    trpc.generation.preview.mutationOptions({
-      onSuccess: () => {
-        toast.success("Preview render queued");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.generation.preview.mutationOptions(),
   );
   const finalRender = useMutation(
-    trpc.generation.final.mutationOptions({
-      onSuccess: () => {
-        toast.success("Final render queued");
-        invalidate();
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.generation.final.mutationOptions(),
   );
+
+  async function runPreview() {
+    if (!projectId) return;
+    try {
+      await preview.mutateAsync({
+        projectId,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      toast.success("Preview render queued");
+      invalidate();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Render failed");
+    }
+  }
+
+  async function runFinal() {
+    if (!projectId) return;
+    try {
+      await finalRender.mutateAsync({
+        projectId,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      toast.success("Final render queued");
+      invalidate();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Render failed");
+    }
+  }
 
   if (projectQuery.isLoading) {
     return (
@@ -82,15 +167,13 @@ export default function ProjectDetailPage() {
         title="Project not found"
         description={projectQuery.error?.message ?? "It may have been deleted."}
         action={
-          <Link href="/projects">
-            <Button>Back to projects</Button>
-          </Link>
+          <Button render={<Link href="/projects" />}>Back to projects</Button>
         }
       />
     );
   }
 
-  const project = projectQuery.data;
+  const project = projectQuery.data as unknown as ProjectDetail;
   const script = project.scripts[0];
   const finalVideo = project.renderedVideos.find(
     (render) => render.kind === "FINAL" && render.status === "COMPLETED",
@@ -116,12 +199,13 @@ export default function ProjectDetailPage() {
         description={project.topic}
         actions={
           <>
-            <Link href={`/studio/${project.id}`}>
-              <Button className="gap-1.5">
-                <Sparkles className="size-4" />
-                Open Studio
-              </Button>
-            </Link>
+            <Button
+              className="gap-1.5"
+              render={<Link href={`/studio/${project.id}`} />}
+            >
+              <Sparkles className="size-4" />
+              Open Studio
+            </Button>
             {finalVideo ? (
               <>
                 <Button
@@ -132,12 +216,14 @@ export default function ProjectDetailPage() {
                   <Download className="size-4" />
                   Download
                 </Button>
-                <Link href={`/publishing?project=${project.id}`}>
-                  <Button variant="outline" className="gap-1.5">
-                    <Send className="size-4" />
-                    Publish
-                  </Button>
-                </Link>
+                <Button
+                  variant="outline"
+                  className="gap-1.5"
+                  render={<Link href={`/publishing?project=${project.id}`} />}
+                >
+                  <Send className="size-4" />
+                  Publish
+                </Button>
               </>
             ) : null}
           </>
@@ -208,13 +294,7 @@ export default function ProjectDetailPage() {
               variant="outline"
               className="w-full gap-1.5"
               disabled={!script || preview.isPending || Boolean(activeJob)}
-              onClick={() => {
-                if (!projectId) return;
-                preview.mutate({
-                  projectId,
-                  idempotencyKey: crypto.randomUUID(),
-                });
-              }}
+              onClick={() => void runPreview()}
             >
               <Play className="size-3.5" />
               Preview render
@@ -222,13 +302,7 @@ export default function ProjectDetailPage() {
             <Button
               className="w-full gap-1.5"
               disabled={!script || finalRender.isPending || Boolean(activeJob)}
-              onClick={() => {
-                if (!projectId) return;
-                finalRender.mutate({
-                  projectId,
-                  idempotencyKey: crypto.randomUUID(),
-                });
-              }}
+              onClick={() => void runFinal()}
             >
               <Film className="size-3.5" />
               Final render
@@ -306,11 +380,13 @@ export default function ProjectDetailPage() {
                 Scenes
               </div>
               {script ? (
-                <Link href={`/studio/${project.id}`}>
-                  <Button variant="outline" size="sm">
-                    Edit in Studio
-                  </Button>
-                </Link>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  render={<Link href={`/studio/${project.id}`} />}
+                >
+                  Edit in Studio
+                </Button>
               ) : null}
             </div>
             {!script ? (

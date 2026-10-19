@@ -19,9 +19,9 @@ The repo started as a Better-T-Stack scaffold (Next.js + Express + tRPC + Prisma
 - **Video Studio**: vertical preview, draggable scene timeline, narration/subtitle/music tracks, per-scene editing, visual replacement, voiceover/scene regeneration, preview/final renders, approval, download.
 - **Publishing Center**: official YouTube OAuth + resumable upload (when credentials are configured), scheduled jobs, retries, status history, and manual export for Instagram Reels/TikTok. Manual exports are recorded as `EXPORTED`, never `PUBLISHED`.
 - **Google/Anthropic-style provider safety**: unknown billable outcomes are not retried blindly; provider request ids and reconciliation are persisted for fal/WaveSpeed.
-- **Tests**: 41 Vitest tests covering script/scene schema validation, duration normalization, money/budget math and rejection thresholds, checkpoint selection, provider HTTP classification, fal.ai adapter flow, media validation, auth guards, and publishing policy.
+- **Tests**: 55 Vitest tests covering script/scene schema validation, duration normalization, money/budget math and rejection thresholds, checkpoint selection, provider HTTP classification, fal/WaveSpeed/Pexels adapter flows, YouTube OAuth token and resumable-upload behavior, retention cleanup, media validation, auth guards, and publishing policy.
 
-Verified locally: the pipeline produced real **45.04s, 1080×1920, 30fps H.264/AAC** MP4s with `passed: true` validation and ₹0 actual cost using local providers.
+Verified locally: the pipeline produced real **45.04s, 1080×1920, 30fps H.264/AAC** MP4s with `passed: true` validation and ₹0 actual cost using local providers. The Docker stack was smoke-tested end to end: migrations, healthy API/worker/web, a 45.02s container-rendered preview, and signed media streaming.
 
 ## Stack
 
@@ -195,7 +195,7 @@ pnpm check-types   # all packages
 pnpm build         # web + server bundles
 ```
 
-The tests use mocked provider HTTP where appropriate. Media validation tests generate real tiny clips with FFmpeg and run ffprobe. Real paid-provider integration tests are intentionally opt-in: only run them with credentials and an explicit budget; no live provider calls are made by the default suite.
+The tests use mocked provider HTTP where appropriate. Media validation tests generate real tiny clips with FFmpeg and run ffprobe. The default suite makes no live provider calls. To verify a live integration, configure credentials and use **Settings → Providers → Test connection** (or the `providers.test` tRPC mutation); paid generation calls are intentionally not part of the automated suite. Set the budget and provider limits before spending anything.
 
 ## Docker
 
@@ -217,7 +217,16 @@ Services:
 - `worker` — BullMQ worker (same image as server; system FFmpeg, eSpeak, fonts)
 - `web` — Next.js standalone on 3001
 
-The server/worker share a `media_data` volume. On the host, media is stored under `apps/server/storage` (gitignored).
+The server/worker share a `media_data` volume. On the host, media is stored under `apps/server/storage` (gitignored). If you already generated media on the host and want to reuse those projects in Docker, copy the folder into the volume once:
+
+```bash
+docker run --rm \
+  -v video-generator_media_data:/data/media \
+  -v "$PWD/apps/server/storage:/src:ro" \
+  alpine sh -c 'cp -a /src/. /data/media/'
+```
+
+A fresh `docker compose up -d --build` runs migrations automatically through the `migrate` service and starts Postgres, Redis, the API, the worker, and the web app. The first build installs the Linux FFmpeg, eSpeak, fonts, and native Sharp binaries.
 
 ## Security and reliability notes
 
@@ -230,6 +239,7 @@ The server/worker share a `media_data` volume. On the host, media is stored unde
 - Rate limits are applied to auth, tRPC, uploads, and OAuth routes with Redis. Generation also enforces the daily limit and one active job per user.
 - Audit logs record provider config changes, deletes, publishing, and exports.
 - Jobs retry with exponential backoff; unknown billable outcomes are stored for reconciliation.
+- **Retention:** temporary job work directories are removed after every run; the worker prunes preview renders and unreferenced uploads older than `MEDIA_RETENTION_DAYS` (default 30; set `0` to disable) every six hours; project media is deleted when the project is deleted; final renders otherwise remain until you delete the project. Signed media URLs expire after one hour. Database rows are retained until the project/user is deleted.
 
 ## Known limitations / blocked until configured
 
@@ -237,7 +247,7 @@ The server/worker share a `media_data` volume. On the host, media is stored unde
 - **YouTube publishing** requires the OAuth app and account authorization described above.
 - **Instagram/TikTok official publishing** requires approved developer apps; this build provides manual export only.
 - **Ollama** has no models installed in this checkout. Pull `llama3.2:3b` (or configure a hosted LLM) for AI scripts; the template provider is the fallback.
-- **ComfyUI/Piper** are not installed. The app detects them, shows setup instructions, and falls back safely.
+- **ComfyUI / Piper** are optional local providers. Capability detection reports missing binaries/models with setup messages; procedural visuals and eSpeak (or hosted TTS) are the fallback paths. `template`, `procedural`, `music-generator`, and `espeak-ng` are available in the Docker image.
 - **Budget enforcement** is app-side accounting. It does not prevent provider-side charges. Set provider spend limits as a second layer.
 - **`ffprobe-static`** ships an x86_64 binary in its darwin-arm64 folder; this project uses `@ffprobe-installer/ffprobe` for a real arm64 binary and prefers system `FFPROBE_PATH` in Docker.
 - **YouTube API quotas** can change; check the current quota before relying on daily uploads.
@@ -245,6 +255,7 @@ The server/worker share a `media_data` volume. On the host, media is stored unde
 ## Troubleshooting
 
 - **FFmpeg/ffprobe not found**: set `FFMPEG_PATH`/`FFPROBE_PATH`; host dev uses `ffmpeg-static`/`@ffprobe-installer`, Docker installs system FFmpeg.
+- **Docker: `Could not load the "sharp" module using the linux-arm64 runtime`**: keep the `supportedArchitectures` Linux entries in `pnpm-workspace.yaml` and rebuild the server/worker image without cache (`docker compose build --no-cache server worker`). Sharp is externalized in the server bundle so its native optional dependencies resolve at runtime.
 - **macOS `say` fails**: confirm `/usr/bin/say -v Samantha -o /tmp/test.aiff "hello"` works; otherwise install eSpeak/Piper or configure hosted TTS.
 - **Ollama unreachable**: start Ollama and run `ollama pull llama3.2:3b`; the Status page reports reachability.
 - **Redis/BullMQ errors**: ensure `docker compose ps` shows Redis healthy and `REDIS_URL=redis://localhost:6380`.

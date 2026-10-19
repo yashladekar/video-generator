@@ -349,10 +349,21 @@ function ProviderCard({
   );
 }
 
+type PricingRow = {
+  id: string;
+  provider: string;
+  model: string;
+  category: string;
+  unit: string;
+  unitPriceUsd: number;
+  active: boolean;
+};
+
 function ProvidersTab() {
   const catalog = useQuery(trpc.providers.catalog.queryOptions());
   const list = useQuery(trpc.providers.list.queryOptions({}));
   const pricing = useQuery(trpc.providers.pricing.queryOptions());
+  const pricingRows = (pricing.data ?? []) as unknown as PricingRow[];
   const queryClient = useQueryClient();
   const [pricingForm, setPricingForm] = useState({
     provider: "fal",
@@ -365,14 +376,28 @@ function ProvidersTab() {
   });
 
   const upsertPricing = useMutation(
-    trpc.providers.upsertPricing.mutationOptions({
-      onSuccess: () => {
-        toast.success("Pricing saved");
-        queryClient.invalidateQueries({ queryKey: trpc.providers.pricing.queryKey() });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
+    trpc.providers.upsertPricing.mutationOptions(),
   );
+
+  async function addPrice() {
+    try {
+      await upsertPricing.mutateAsync({
+        provider: pricingForm.provider.trim(),
+        model: pricingForm.model.trim(),
+        category: pricingForm.category as "LLM",
+        unit: pricingForm.unit.trim(),
+        unitPriceUsd: Number(pricingForm.unitPriceUsd),
+        sourceUrl: pricingForm.sourceUrl.trim() || undefined,
+        active: true,
+      });
+      toast.success("Pricing saved");
+      queryClient.invalidateQueries({
+        queryKey: trpc.providers.pricing.queryKey(),
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not save pricing");
+    }
+  }
 
   const configuredMap = useMemo(() => {
     type ProviderRow = NonNullable<typeof list.data>[number];
@@ -544,17 +569,7 @@ function ProvidersTab() {
                 !pricingForm.model ||
                 !pricingForm.unit
               }
-              onClick={() =>
-                upsertPricing.mutate({
-                  provider: pricingForm.provider.trim(),
-                  model: pricingForm.model.trim(),
-                  category: pricingForm.category as "LLM",
-                  unit: pricingForm.unit.trim(),
-                  unitPriceUsd: Number(pricingForm.unitPriceUsd),
-                  sourceUrl: pricingForm.sourceUrl.trim() || undefined,
-                  active: true,
-                })
-              }
+              onClick={() => void addPrice()}
             >
               <Plus className="size-4" />
               Add / update price
@@ -575,7 +590,7 @@ function ProvidersTab() {
               </tr>
             </thead>
             <tbody>
-              {(pricing.data ?? []).map((row) => (
+              {pricingRows.map((row) => (
                 <tr key={row.id} className="border-t border-border">
                   <td className="p-2">{row.provider}</td>
                   <td className="p-2 font-mono">{row.model}</td>
@@ -598,6 +613,23 @@ function ProvidersTab() {
     </div>
   );
 }
+
+type UsageRow = {
+  id: string;
+  provider: string;
+  category: string;
+  model: string | null;
+  unit: string | null;
+  estimatedCostInrPaise: number;
+  actualCostInrPaise: number | null;
+  createdAt: string;
+};
+
+type UsageLedgerRow = UsageRow & {
+  inputUnits: number | null;
+  outputUnits: number | null;
+  providerRequestId: string | null;
+};
 
 function BudgetTab() {
   const budget = useQuery(trpc.budget.get.queryOptions());
@@ -669,6 +701,7 @@ function BudgetTab() {
   }
 
   const data = budget.data;
+  const recentUsage = data.recentUsage as unknown as UsageRow[];
   const used = data.spentInrPaise + data.reservedInrPaise;
   const usedPercent = data.amountInrPaise
     ? Math.min(100, (used / data.amountInrPaise) * 100)
@@ -919,12 +952,12 @@ function BudgetTab() {
           Recent usage
         </div>
         <div className="divide-y divide-border">
-          {data.recentUsage.length === 0 ? (
+          {recentUsage.length === 0 ? (
             <div className="p-4 text-xs text-muted-foreground">
               No usage records yet. Local providers record ₹0.
             </div>
           ) : (
-            data.recentUsage.map((usage) => (
+            recentUsage.map((usage) => (
               <div key={usage.id} className="flex flex-wrap items-center justify-between gap-2 p-3 text-xs">
                 <div>
                   <div className="font-medium">
@@ -1224,6 +1257,7 @@ function UsageTab() {
       costType: "ALL",
     }),
   );
+  const ledgerRows = (usage.data?.items ?? []) as unknown as UsageLedgerRow[];
 
   return (
     <div className="border border-border bg-card">
@@ -1237,7 +1271,7 @@ function UsageTab() {
         <div className="p-4">
           <Skeleton className="h-40 w-full" />
         </div>
-      ) : !usage.data || usage.data.items.length === 0 ? (
+          ) : ledgerRows.length === 0 ? (
         <div className="p-6 text-xs text-muted-foreground">No usage records yet.</div>
       ) : (
         <div className="overflow-x-auto">
@@ -1255,7 +1289,7 @@ function UsageTab() {
               </tr>
             </thead>
             <tbody>
-              {usage.data.items.map((row) => (
+              {ledgerRows.map((row) => (
                 <tr key={row.id} className="border-t border-border">
                   <td className="p-2 text-muted-foreground">
                     {formatDate(row.createdAt)}
@@ -1331,9 +1365,9 @@ function SettingsInner() {
         title="Settings"
         description="Providers, credentials, pricing, budgets, defaults, and publishing accounts. Secrets never leave the server."
         actions={
-          <Link href="/dashboard">
-            <Button variant="outline">Back to dashboard</Button>
-          </Link>
+          <Button variant="outline" render={<Link href="/dashboard" />}>
+            Back to dashboard
+          </Button>
         }
       />
       <Tabs value={tab} onChange={setTab} tabs={TABS} />

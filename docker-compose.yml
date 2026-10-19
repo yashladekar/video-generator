@@ -47,7 +47,9 @@ services:
       REDIS_URL: redis://redis:6379
       MEDIA_ROOT: /data/media
       PUBLIC_API_URL: http://localhost:3000
-    command: ["pnpm", "--filter", "@video-generator/db", "exec", "prisma", "migrate", "deploy"]
+    working_dir: /app/packages/db
+    command:
+      ["/app/packages/db/node_modules/.bin/prisma", "migrate", "deploy"]
     depends_on:
       postgres:
         condition: service_healthy

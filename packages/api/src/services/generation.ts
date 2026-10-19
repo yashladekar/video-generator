@@ -12,6 +12,7 @@ import {
   getBudgetStatus,
   getDailyUsage,
 } from "./budget";
+import { latestStepsByType } from "../pipeline/checkpoint";
 import { estimateGenerationCost } from "./pricing";
 import { requireProject } from "./projects";
 
@@ -291,7 +292,11 @@ export async function getJob(ctx: Context, userId: string, jobId: string) {
     },
   });
   if (!job) throw new NotFoundError("Generation job not found");
-  return job;
+  const latest = latestStepsByType(job.steps);
+  return {
+    ...job,
+    steps: [...latest.values()].sort((a, b) => a.orderIndex - b.orderIndex),
+  };
 }
 
 export async function listJobs(

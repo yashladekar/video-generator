@@ -4,6 +4,7 @@ import type { Context } from "../context";
 import { renderTextPng, wrapText } from "../lib/text";
 import { hashCacheKey } from "../lib/hash";
 import type { StorageService } from "../providers/storage";
+import { storeAsset } from "./asset-store";
 
 export type CaptionChunk = {
   key: string;
@@ -202,18 +203,16 @@ export async function generateSubtitles(
 
   const srtKey = `projects/${input.projectId}/subtitles/captions.srt`;
   const srtContent = srtEntries.join("\n");
-  await input.storage.put(srtKey, srtContent, "application/x-subrip");
-  const srtAsset = await ctx.db.mediaAsset.create({
-    data: {
-      userId: input.userId,
-      projectId: input.projectId,
-      kind: "SUBTITLE",
-      source: "LOCAL",
-      status: "READY",
-      storageKey: srtKey,
-      mimeType: "application/x-subrip",
-      sizeBytes: Buffer.byteLength(srtContent),
-    },
+  const srtAsset = await storeAsset(ctx, {
+    userId: input.userId,
+    projectId: input.projectId,
+    kind: "SUBTITLE",
+    source: "LOCAL",
+    storageKey: srtKey,
+    data: srtContent,
+    mimeType: "application/x-subrip",
+    provider: "local",
+    storage: input.storage,
   });
 
   return {

@@ -266,9 +266,9 @@ function PublishingInner() {
         title="Publishing center"
         description="Publish through the official YouTube API when authorized, or export manually for Instagram and TikTok. Manual exports are never marked as published."
         actions={
-          <Link href="/projects">
-            <Button variant="outline">Open projects</Button>
-          </Link>
+          <Button variant="outline" render={<Link href="/projects" />}>
+            Open projects
+          </Button>
         }
       />
 
@@ -309,9 +309,9 @@ function PublishingInner() {
                   title="No final renders yet"
                   description="Render a final video in Studio, then return here to publish or export."
                   action={
-                    <Link href="/projects">
-                      <Button>Open projects</Button>
-                    </Link>
+                    <Button render={<Link href="/projects" />}>
+                      Open projects
+                    </Button>
                   }
                 />
               ) : (

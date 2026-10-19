@@ -7,5 +7,11 @@ export default defineConfig({
   clean: true,
   deps: {
     alwaysBundle: [/@video-generator\/.*/],
+    neverBundle: [
+      "sharp",
+      "ffmpeg-static",
+      "ffprobe-static",
+      "@ffprobe-installer/ffprobe",
+    ],
   },
 });

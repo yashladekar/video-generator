@@ -220,6 +220,14 @@ function createRuntime(input: {
       await updateProgress();
       return output;
     } catch (error) {
+      ctx.logger.error(
+        { error, step: type, jobId: job.id },
+        "generation step failed",
+      );
+      const safeMessage =
+        error instanceof AppError
+          ? error.message.slice(0, 2000)
+          : "An unexpected error occurred while processing this stage. Check the server logs for details.";
       await ctx.db.generationStep.update({
         where: { id: step.id },
         data: {
@@ -230,10 +238,7 @@ function createRuntime(input: {
             error instanceof AppError ? error.code : "UNEXPECTED_ERROR",
           errorClass:
             error instanceof AppError ? error.kind : "INTERNAL",
-          errorMessage:
-            error instanceof Error
-              ? error.message.slice(0, 2000)
-              : String(error),
+          errorMessage: safeMessage,
         },
       });
       await updateProgress();
@@ -1973,6 +1978,7 @@ async function finalizeSuccess(runtime: Runtime) {
 }
 
 async function handleFailure(ctx: Context, job: LoadedJob, error: unknown) {
+  ctx.logger.error({ error, jobId: job.id }, "generation job failed");
   const current = await ctx.db.generationJob.findUnique({
     where: { id: job.id },
     select: { cancelRequested: true },
@@ -1986,8 +1992,11 @@ async function handleFailure(ctx: Context, job: LoadedJob, error: unknown) {
         : "UNEXPECTED_ERROR";
   const errorClass =
     error instanceof AppError ? error.kind : cancelled ? "CANCELLED" : "INTERNAL";
-  const message =
-    error instanceof Error ? error.message.slice(0, 2000) : String(error);
+  const message = cancelled
+    ? "Job cancelled"
+    : error instanceof AppError
+      ? error.message.slice(0, 2000)
+      : "An unexpected error occurred while generating this reel. Check the server logs for details.";
 
   await ctx.db.generationJob.update({
     where: { id: job.id },

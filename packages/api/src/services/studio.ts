@@ -210,26 +210,46 @@ export async function reorderScenes(
   ) {
     throw new ValidationError("Scene list does not match the project");
   }
-  let cursor = 0;
-  for (const [index, sceneId] of input.sceneIds.entries()) {
-    const scene = script.scenes.find((item) => item.id === sceneId);
-    if (!scene) continue;
-    await ctx.db.scene.update({
-      where: { id: sceneId },
-      data: {
-        orderIndex: index,
-        sceneNumber: index + 1,
-        startSeconds: cursor,
-        endSeconds: cursor + scene.durationSeconds,
-      },
-    });
-    cursor += scene.durationSeconds;
-  }
+  const ordered = input.sceneIds
+    .map((sceneId) => script.scenes.find((item) => item.id === sceneId))
+    .filter((scene) => scene !== undefined);
+
+  await ctx.db.$transaction(async (tx) => {
+    // Move to temporary negative numbers first so swapping scene numbers
+    // cannot violate the (scriptId, sceneNumber) unique constraint.
+    for (const [index, scene] of ordered.entries()) {
+      await tx.scene.update({
+        where: { id: scene.id },
+        data: {
+          orderIndex: index,
+          sceneNumber: -(index + 1),
+        },
+      });
+    }
+    let cursor = 0;
+    for (const [index, scene] of ordered.entries()) {
+      await tx.scene.update({
+        where: { id: scene.id },
+        data: {
+          orderIndex: index,
+          sceneNumber: index + 1,
+          startSeconds: cursor,
+          endSeconds: cursor + scene.durationSeconds,
+        },
+      });
+      cursor += scene.durationSeconds;
+    }
+  });
+
+  const totalDuration = ordered.reduce(
+    (sum, scene) => sum + scene.durationSeconds,
+    0,
+  );
   await ctx.db.project.update({
     where: { id: input.projectId },
     data: { status: "CONFIGURED" },
   });
-  return { ok: true, totalDuration: cursor };
+  return { ok: true, totalDuration };
 }
 
 export async function replaceSceneVisual(

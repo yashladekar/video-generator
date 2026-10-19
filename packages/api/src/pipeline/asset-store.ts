@@ -39,38 +39,56 @@ export async function storeAsset(
   }
 
   await input.storage.put(input.storageKey, input.data, input.mimeType);
-  try {
-    return await ctx.db.mediaAsset.create({
-      data: {
-        userId: input.userId,
-        projectId: input.projectId ?? null,
-        kind: input.kind,
-        source: input.source,
-        status: "READY",
-        storageKey: input.storageKey,
-        originalName: input.originalName,
-        mimeType: input.mimeType,
-        sizeBytes:
-          typeof input.data === "string"
-            ? Buffer.byteLength(input.data)
-            : input.data.byteLength,
-        width: input.width,
-        height: input.height,
-        durationSeconds: input.durationSeconds,
-        attribution: input.attribution,
-        provider: input.provider,
-        providerModel: input.providerModel,
-        providerRequestId: input.providerRequestId,
-        cacheKey: input.cacheKey,
-        metadata: toJsonValue(input.metadata),
-      },
+  const sizeBytes =
+    typeof input.data === "string"
+      ? Buffer.byteLength(input.data)
+      : input.data.byteLength;
+  const data = {
+    userId: input.userId,
+    projectId: input.projectId ?? null,
+    kind: input.kind,
+    source: input.source,
+    status: "READY" as const,
+    storageKey: input.storageKey,
+    originalName: input.originalName,
+    mimeType: input.mimeType,
+    sizeBytes,
+    width: input.width,
+    height: input.height,
+    durationSeconds: input.durationSeconds,
+    attribution: input.attribution,
+    provider: input.provider,
+    providerModel: input.providerModel,
+    providerRequestId: input.providerRequestId,
+    cacheKey: input.cacheKey,
+    metadata: toJsonValue(input.metadata),
+  };
+  const existingByKey = await ctx.db.mediaAsset.findUnique({
+    where: { storageKey: input.storageKey },
+  });
+  if (existingByKey) {
+    return ctx.db.mediaAsset.update({
+      where: { id: existingByKey.id },
+      data,
     });
+  }
+  try {
+    return await ctx.db.mediaAsset.create({ data });
   } catch (error) {
     if (input.cacheKey) {
       const cached = await ctx.db.mediaAsset.findUnique({
         where: { cacheKey: input.cacheKey },
       });
       if (cached) return cached;
+    }
+    const raced = await ctx.db.mediaAsset.findUnique({
+      where: { storageKey: input.storageKey },
+    });
+    if (raced) {
+      return ctx.db.mediaAsset.update({
+        where: { id: raced.id },
+        data,
+      });
     }
     throw error;
   }

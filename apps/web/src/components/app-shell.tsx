@@ -22,6 +22,7 @@ import { Button } from "@video-generator/ui/components/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -100,12 +101,13 @@ function SidebarContent({
         <Brand />
       </div>
       <div className="p-3">
-        <Link href="/create" onClick={onNavigate}>
-          <Button className="w-full justify-start gap-2">
-            <Plus className="size-4" />
-            Create New Reel
-          </Button>
-        </Link>
+        <Button
+          className="w-full justify-start gap-2"
+          render={<Link href="/create" onClick={onNavigate} />}
+        >
+          <Plus className="size-4" />
+          Create New Reel
+        </Button>
       </div>
       <nav className="flex flex-col gap-0.5 px-2">
         {NAV.map((item) => (
@@ -204,44 +206,46 @@ function NotificationsMenu() {
         <span className="sr-only">Notifications</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80 bg-card">
-        <DropdownMenuLabel className="flex items-center justify-between">
-          Notifications
-          {items.length > 0 ? (
-            <button
-              type="button"
-              className="text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
-              onClick={() => markAll.mutate()}
-            >
-              Mark all read
-            </button>
-          ) : null}
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {items.length === 0 ? (
-          <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            You're all caught up.
-          </div>
-        ) : (
-          items.slice(0, 6).map((notification) => (
-            <DropdownMenuItem
-              key={notification.id}
-              className="flex flex-col items-start gap-1 py-2"
-              onClick={() =>
-                window.location.assign(notification.link ?? "/dashboard")
-              }
-            >
-              <span className="text-xs font-medium">{notification.title}</span>
-              {notification.body ? (
-                <span className="line-clamp-2 text-[11px] text-muted-foreground">
-                  {notification.body}
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="flex items-center justify-between">
+            Notifications
+            {items.length > 0 ? (
+              <button
+                type="button"
+                className="text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+                onClick={() => markAll.mutate()}
+              >
+                Mark all read
+              </button>
+            ) : null}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {items.length === 0 ? (
+            <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+              You're all caught up.
+            </div>
+          ) : (
+            items.slice(0, 6).map((notification) => (
+              <DropdownMenuItem
+                key={notification.id}
+                className="flex flex-col items-start gap-1 py-2"
+                onClick={() =>
+                  window.location.assign(notification.link ?? "/dashboard")
+                }
+              >
+                <span className="text-xs font-medium">{notification.title}</span>
+                {notification.body ? (
+                  <span className="line-clamp-2 text-[11px] text-muted-foreground">
+                    {notification.body}
+                  </span>
+                ) : null}
+                <span className="text-[10px] text-muted-foreground">
+                  {timeAgo(notification.createdAt)}
                 </span>
-              ) : null}
-              <span className="text-[10px] text-muted-foreground">
-                {timeAgo(notification.createdAt)}
-              </span>
-            </DropdownMenuItem>
-          ))
-        )}
+              </DropdownMenuItem>
+            ))
+          )}
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -307,12 +311,14 @@ export function AppShell({ children }: { children: ReactNode }) {
             </span>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
-            <Link href="/create" className="hidden sm:block">
-              <Button size="sm" className="gap-1.5">
-                <Plus className="size-3.5" />
-                New Reel
-              </Button>
-            </Link>
+            <Button
+              size="sm"
+              className="hidden gap-1.5 sm:inline-flex"
+              render={<Link href="/create" />}
+            >
+              <Plus className="size-3.5" />
+              New Reel
+            </Button>
             <NotificationsMenu />
             <div className="hidden sm:block">
               <ModeToggle />
