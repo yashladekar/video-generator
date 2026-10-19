@@ -101,7 +101,7 @@ function SidebarContent({
         <Brand />
       </div>
       <div className="p-3">
-        <Button
+        <Button nativeButton={false}
           className="w-full justify-start gap-2"
           render={<Link href="/create" onClick={onNavigate} />}
         >
@@ -311,7 +311,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </span>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
-            <Button
+            <Button nativeButton={false}
               size="sm"
               className="hidden gap-1.5 sm:inline-flex"
               render={<Link href="/create" />}

@@ -192,7 +192,7 @@ export default function ProjectsPage() {
         title="Projects"
         description="Search, filter, open, duplicate, rename, archive, download, or delete your saved reels."
         actions={
-          <Button className="gap-1.5" render={<Link href="/create" />}>
+          <Button nativeButton={false} className="gap-1.5" render={<Link href="/create" />}>
             <Plus className="size-4" />
             Create New Reel
           </Button>
@@ -275,7 +275,7 @@ export default function ProjectsPage() {
           title="No projects match this view"
           description="Create a project or clear the filters. The default local pipeline is free."
           action={
-            <Button className="gap-1.5" render={<Link href="/create" />}>
+            <Button nativeButton={false} className="gap-1.5" render={<Link href="/create" />}>
               <Plus className="size-4" />
               Create New Reel
             </Button>
@@ -427,7 +427,7 @@ export default function ProjectsPage() {
                     </div>
                   </div>
                   {view === "list" ? (
-                    <Button
+                    <Button nativeButton={false}
                       variant="outline"
                       size="sm"
                       className="gap-1.5"

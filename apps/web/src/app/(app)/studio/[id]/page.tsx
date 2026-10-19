@@ -590,7 +590,7 @@ export default function StudioPage() {
                 {approved ? "Approved" : "Approve"}
               </Button>
             ) : null}
-            <Button
+            <Button nativeButton={false}
               variant="outline"
               size="sm"
               className="border-white/15 bg-white/5 text-white hover:bg-white/10"
@@ -610,7 +610,7 @@ export default function StudioPage() {
             title="No script yet"
             description="Generate a reel first. The Studio becomes available after the script and scenes are created."
             action={
-              <Button render={<Link href="/create" />}>Create a reel</Button>
+              <Button nativeButton={false} render={<Link href="/create" />}>Create a reel</Button>
             }
           />
         </div>

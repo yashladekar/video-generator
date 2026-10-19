@@ -167,7 +167,7 @@ export default function ProjectDetailPage() {
         title="Project not found"
         description={projectQuery.error?.message ?? "It may have been deleted."}
         action={
-          <Button render={<Link href="/projects" />}>Back to projects</Button>
+          <Button nativeButton={false} render={<Link href="/projects" />}>Back to projects</Button>
         }
       />
     );
@@ -199,7 +199,7 @@ export default function ProjectDetailPage() {
         description={project.topic}
         actions={
           <>
-            <Button
+            <Button nativeButton={false}
               className="gap-1.5"
               render={<Link href={`/studio/${project.id}`} />}
             >
@@ -216,7 +216,7 @@ export default function ProjectDetailPage() {
                   <Download className="size-4" />
                   Download
                 </Button>
-                <Button
+                <Button nativeButton={false}
                   variant="outline"
                   className="gap-1.5"
                   render={<Link href={`/publishing?project=${project.id}`} />}
@@ -380,7 +380,7 @@ export default function ProjectDetailPage() {
                 Scenes
               </div>
               {script ? (
-                <Button
+                <Button nativeButton={false}
                   variant="outline"
                   size="sm"
                   render={<Link href={`/studio/${project.id}`} />}

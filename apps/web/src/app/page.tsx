@@ -75,7 +75,7 @@ export default function LandingPage() {
           >
             Sign in
           </Link>
-          <Button
+          <Button nativeButton={false}
             size="sm"
             className="gap-1.5"
             render={<Link href={primaryHref} />}
@@ -114,7 +114,7 @@ export default function LandingPage() {
               monthly budget you control.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
-              <Button
+              <Button nativeButton={false}
                 size="lg"
                 className="gap-2 bg-white text-black hover:bg-white/90"
                 render={<Link href={primaryHref} />}
@@ -122,7 +122,7 @@ export default function LandingPage() {
                 <Play className="size-4" />
                 {primaryLabel}
               </Button>
-              <Button
+              <Button nativeButton={false}
                 size="lg"
                 variant="outline"
                 className="border-white/20 bg-transparent text-white hover:bg-white/10"
@@ -205,7 +205,7 @@ export default function LandingPage() {
               provider calls are recorded, and unknown outcomes are never
               retried blindly.
             </p>
-            <Button
+            <Button nativeButton={false}
               className="mt-6 gap-1.5"
               render={<Link href={primaryHref} />}
             >

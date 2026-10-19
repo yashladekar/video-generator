@@ -24,7 +24,7 @@ export default function UserMenu() {
 
   if (!session) {
     return (
-      <Button variant="outline" render={<Link href="/login" />}>
+      <Button nativeButton={false} variant="outline" render={<Link href="/login" />}>
         Sign In
       </Button>
     );

@@ -416,7 +416,7 @@ export default function CreateReelPage() {
         title="Create a reel"
         description="Brief the idea, configure the format, check the cost, then start a real background generation job."
         actions={
-          <Button variant="outline" render={<Link href="/dashboard" />}>
+          <Button nativeButton={false} variant="outline" render={<Link href="/dashboard" />}>
             Cancel
           </Button>
         }
@@ -1196,7 +1196,7 @@ export default function CreateReelPage() {
                             </Button>
                           ) : null}
                           {jobData?.status === "SUCCEEDED" ? (
-                            <Button
+                            <Button nativeButton={false}
                               size="sm"
                               className="gap-1.5"
                               render={<Link href={`/studio/${projectId}`} />}
@@ -1240,14 +1240,14 @@ export default function CreateReelPage() {
                         </div>
                         {jobData?.status === "SUCCEEDED" ? (
                           <div className="mt-4 flex flex-wrap gap-2">
-                            <Button
+                            <Button nativeButton={false}
                               className="gap-1.5"
                               render={<Link href={`/studio/${projectId}`} />}
                             >
                               <Sparkles className="size-4" />
                               Preview & edit in Studio
                             </Button>
-                            <Button
+                            <Button nativeButton={false}
                               variant="outline"
                               render={<Link href={`/projects/${projectId}`} />}
                             >
@@ -1265,7 +1265,7 @@ export default function CreateReelPage() {
                   <ArrowLeft className="size-4" />
                   Back
                 </Button>
-                <Button
+                <Button nativeButton={false}
                   variant="outline"
                   render={<Link href="/dashboard" />}
                 >

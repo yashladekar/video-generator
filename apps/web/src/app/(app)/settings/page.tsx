@@ -1365,7 +1365,7 @@ function SettingsInner() {
         title="Settings"
         description="Providers, credentials, pricing, budgets, defaults, and publishing accounts. Secrets never leave the server."
         actions={
-          <Button variant="outline" render={<Link href="/dashboard" />}>
+          <Button nativeButton={false} variant="outline" render={<Link href="/dashboard" />}>
             Back to dashboard
           </Button>
         }

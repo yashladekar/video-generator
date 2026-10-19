@@ -96,7 +96,7 @@ export default function DashboardPage() {
         title="Dashboard"
         description="Your generation pipeline, budget, and recent activity — all from persisted data."
         actions={
-          <Button className="gap-1.5" render={<Link href="/create" />}>
+          <Button nativeButton={false} className="gap-1.5" render={<Link href="/create" />}>
             <Plus className="size-4" />
             Create New Reel
           </Button>
@@ -150,7 +150,7 @@ export default function DashboardPage() {
                 </span>
               </div>
             </div>
-            <Button
+            <Button nativeButton={false}
               variant="outline"
               size="sm"
               render={<Link href="/settings?tab=budget" />}
@@ -242,7 +242,7 @@ export default function DashboardPage() {
               title="No projects yet"
               description="Create your first reel. The default local pipeline costs ₹0."
               action={
-                <Button className="gap-1.5" render={<Link href="/create" />}>
+                <Button nativeButton={false} className="gap-1.5" render={<Link href="/create" />}>
                   <Plus className="size-4" />
                   Create New Reel
                 </Button>
