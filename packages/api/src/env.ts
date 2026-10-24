@@ -26,6 +26,7 @@ export type RuntimeEnv = {
   S3_SECRET_ACCESS_KEY?: string;
   S3_FORCE_PATH_STYLE?: boolean;
   MEDIA_RETENTION_DAYS?: number;
+  MEDIA_INTERMEDIATE_RETENTION_HOURS?: number;
   MAX_UPLOAD_MB?: number;
   WORKER_CONCURRENCY?: number;
   USD_TO_INR_RATE?: number;

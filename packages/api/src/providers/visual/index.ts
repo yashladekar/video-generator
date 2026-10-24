@@ -9,6 +9,7 @@ import type {
   ResolvedProvider,
   VideoGenerateInput,
   VideoGenerateOutput,
+  VideoKeyframe,
   VideoProvider,
 } from "../types";
 import { comfyUiImageProvider, comfyUiVideoProvider } from "./comfyui";
@@ -91,6 +92,16 @@ export type GeneratedVideo = VideoGenerateOutput & {
   resolvedProvider: ResolvedProvider;
 };
 
+export function imageToVideoProviders(): string[] {
+  return [...VIDEO_PROVIDERS.values()]
+    .filter((adapter) => adapter.supportsImageToVideo === true)
+    .map((adapter) => adapter.provider);
+}
+
+export function videoProviderSupportsImageToVideo(provider: string): boolean {
+  return VIDEO_PROVIDERS.get(provider)?.supportsImageToVideo === true;
+}
+
 export async function generateVideoWithFallback(
   ctx: Context,
   userId: string,
@@ -100,6 +111,7 @@ export async function generateVideoWithFallback(
     localOnly?: boolean;
     autoFallback?: boolean;
     signal?: AbortSignal;
+    imageToVideoOnly?: boolean;
   } = {},
 ): Promise<GeneratedVideo> {
   const chain = await resolveProviderChain(
@@ -109,6 +121,10 @@ export async function generateVideoWithFallback(
     options.preferredProvider,
     { localOnly: options.localOnly },
   );
+  const requiresImageToVideo = Boolean(input.image) || options.imageToVideoOnly;
+  const candidates = requiresImageToVideo
+    ? chain.filter((entry) => videoProviderSupportsImageToVideo(entry.provider))
+    : chain;
   const callCtx: ProviderCallContext = {
     env: ctx.env,
     signal: options.signal ?? new AbortController().signal,
@@ -116,7 +132,7 @@ export async function generateVideoWithFallback(
     userId,
   };
   let lastError: unknown;
-  for (const [index, resolved] of chain.entries()) {
+  for (const [index, resolved] of candidates.entries()) {
     const adapter = VIDEO_PROVIDERS.get(resolved.provider);
     if (!adapter) continue;
     try {
@@ -131,13 +147,108 @@ export async function generateVideoWithFallback(
         },
         "video provider failed",
       );
-      if (options.autoFallback === false || index >= chain.length - 1) break;
+      if (options.autoFallback === false || index >= candidates.length - 1) break;
     }
   }
   if (lastError instanceof Error) throw lastError;
   throw new ProviderError(
-    "NO_VIDEO_PROVIDER",
-    "No video provider is available",
+    requiresImageToVideo ? "NO_IMAGE_TO_VIDEO_PROVIDER" : "NO_VIDEO_PROVIDER",
+    requiresImageToVideo
+      ? "No provider supports image-to-video clips. Configure a turbo image-to-video model."
+      : "No video provider is available",
     { provider: "video", kind: "PROVIDER_PERMANENT" },
   );
+}
+
+export type HybridVideoResult = {
+  video: GeneratedVideo;
+  keyframeProvider: string;
+  keyframeReused: boolean;
+};
+
+/**
+ * Image-to-video workflow: produce (or reuse) one cheap keyframe, then animate
+ * it with a turbo image-to-video model. Only providers that declare
+ * image-to-video support are eligible, so this can never silently fall back to
+ * an expensive native text-to-video endpoint.
+ */
+export async function generateHybridVideoWithFallback(
+  ctx: Context,
+  userId: string,
+  input: {
+    prompt: string;
+    durationSeconds: number;
+    aspectRatio: string;
+    width: number;
+    height: number;
+    style?: string;
+    seed?: number;
+    motion?: string;
+    model?: string;
+    keyframe?: VideoKeyframe | null;
+  },
+  options: {
+    preferredImageProvider?: string | null;
+    preferredVideoProvider?: string | null;
+    localOnly?: boolean;
+    autoFallback?: boolean;
+    signal?: AbortSignal;
+  } = {},
+): Promise<HybridVideoResult> {
+  let keyframe = input.keyframe ?? null;
+  let keyframeProvider = keyframe?.provider ?? "unknown";
+  if (!keyframe) {
+    const generated = await generateImageWithFallback(
+      ctx,
+      userId,
+      {
+        prompt: input.prompt,
+        width: input.width,
+        height: input.height,
+        style: input.style,
+        seed: input.seed,
+      },
+      {
+        preferredProvider: options.preferredImageProvider,
+        localOnly: options.localOnly,
+        autoFallback: options.autoFallback,
+        signal: options.signal,
+      },
+    );
+    keyframe = {
+      data: generated.image,
+      mimeType: generated.mimeType,
+      provider: generated.provider,
+      requestId: generated.requestId,
+    };
+    keyframeProvider = generated.provider;
+  }
+
+  const video = await generateVideoWithFallback(
+    ctx,
+    userId,
+    {
+      prompt: input.prompt,
+      durationSeconds: input.durationSeconds,
+      aspectRatio: input.aspectRatio,
+      width: input.width,
+      height: input.height,
+      model: input.model,
+      motion: input.motion,
+      image: keyframe,
+    },
+    {
+      preferredProvider: options.preferredVideoProvider,
+      localOnly: options.localOnly,
+      autoFallback: options.autoFallback,
+      signal: options.signal,
+      imageToVideoOnly: true,
+    },
+  );
+
+  return {
+    video,
+    keyframeProvider,
+    keyframeReused: Boolean(input.keyframe),
+  };
 }

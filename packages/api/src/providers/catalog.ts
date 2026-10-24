@@ -141,12 +141,13 @@ export const PROVIDER_CATALOG: ProviderDefinition[] = [
     category: "IMAGE",
     label: "fal.ai",
     description:
-      "Hosted image/video generation. Uses the queue API and live model pricing when configured.",
+      "Hosted image/video generation. Uses the queue API and live model pricing when configured. Keep this on the cheap keyframe tier (FLUX.1 [schnell]) and let the video stage animate it.",
     docsUrl: "https://fal.ai/docs",
     local: false,
     free: false,
     secretLabel: "API key",
-    configHint: "Model id and an input template.",
+    configHint:
+      "Keyframe model id (default fal-ai/flux/schnell) and an input template.",
   },
   {
     id: "wavespeed",
@@ -187,12 +188,13 @@ export const PROVIDER_CATALOG: ProviderDefinition[] = [
     category: "TEXT_TO_VIDEO",
     label: "fal.ai video",
     description:
-      "Hosted text-to-video clips. Budget-gated and limited to selected scenes.",
+      "Hosted clips through the image-to-video turbo workflow: one cheap keyframe is animated per clip instead of paying for native text-to-video. Budget-gated, limited to selected scenes, and defaulted to the cheapest per-second tier.",
     docsUrl: "https://fal.ai/docs/model-api-reference/video-generation-api/overview",
     local: false,
     free: false,
     secretLabel: "API key",
-    configHint: "Video model id and input template.",
+    configHint:
+      "imageToVideoModel (default fal-ai/ltx-video-13b-distilled/image-to-video), keyframeModel, and an input template.",
   },
   {
     id: "wavespeed",

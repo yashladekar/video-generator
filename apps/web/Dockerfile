@@ -1,16 +1,30 @@
+# syntax=docker/dockerfile:1.7
+
 FROM node:24-slim AS builder
 RUN npm install -g pnpm@12.11.2
 WORKDIR /app
 
 COPY . .
-RUN --mount=type=secret,id=web_env,target=/app/apps/web/.env.local --mount=type=secret,id=server_env,target=/app/apps/server/.env.local --mount=type=cache,target=/pnpm-store pnpm install --store-dir /pnpm-store
+RUN --mount=type=secret,id=web_env,target=/app/apps/web/.env.local \
+    --mount=type=secret,id=server_env,target=/app/apps/server/.env.local \
+    --mount=type=cache,target=/pnpm-store \
+    pnpm install --store-dir /pnpm-store --frozen-lockfile
 
 ARG NEXT_PUBLIC_SERVER_URL
 ENV NEXT_PUBLIC_SERVER_URL=${NEXT_PUBLIC_SERVER_URL}
 ENV NODE_ENV=production
-RUN --mount=type=secret,id=web_env,target=/app/apps/web/.env.local --mount=type=secret,id=server_env,target=/app/apps/server/.env.local cd apps/web && pnpm run build && rm -f .next/standalone/.env* .next/standalone/apps/web/.env*
+RUN --mount=type=secret,id=web_env,target=/app/apps/web/.env.local \
+    --mount=type=secret,id=server_env,target=/app/apps/server/.env.local \
+    cd apps/web && pnpm run build && rm -f .next/standalone/.env* .next/standalone/apps/web/.env*
 # standalone output excludes public/; ensure it exists so the runner copy never fails
 RUN mkdir -p apps/web/public
+
+# varlock is a runtime dependency (env auto-load), so only dev tooling is pruned.
+FROM builder AS production-deps
+RUN --mount=type=secret,id=web_env,target=/app/apps/web/.env.local \
+    --mount=type=secret,id=server_env,target=/app/apps/server/.env.local \
+    --mount=type=cache,target=/pnpm-store \
+    pnpm install --prod --frozen-lockfile --store-dir /pnpm-store
 
 FROM node:24-slim AS runner
 WORKDIR /app
@@ -20,7 +34,7 @@ COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /app/apps/web/public ./apps/web/public
 # auto-load needs the Varlock CLI and its installed dependencies.
-COPY --from=builder /app/node_modules ./node_modules
+COPY --from=production-deps /app/node_modules ./node_modules
 COPY --from=builder /app/apps/web/.env.schema ./apps/web/.env.schema
 
 ENV HOSTNAME=0.0.0.0

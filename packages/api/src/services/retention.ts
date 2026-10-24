@@ -6,10 +6,14 @@ import {
 } from "../providers/storage";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+
+export const DEFAULT_INTERMEDIATE_RETENTION_HOURS = 48;
 
 export type RetentionOptions = {
   now?: Date;
   retentionDays?: number;
+  intermediateRetentionHours?: number;
   limit?: number;
   storageFor?: (userId: string) => Promise<StorageService>;
 };
@@ -18,14 +22,21 @@ export type RetentionResult = {
   disabled: boolean;
   retentionDays: number;
   cutoff: string;
+  intermediateRetentionHours: number;
+  intermediateCutoff: string;
   previewRendersDeleted: number;
   orphanAssetsDeleted: number;
+  intermediateAssetsDeleted: number;
   filesDeleted: number;
   errors: number;
 };
 
 export function retentionCutoff(days: number, now = new Date()): Date {
   return new Date(now.getTime() - days * DAY_MS);
+}
+
+export function intermediateCutoff(hours: number, now = new Date()): Date {
+  return new Date(now.getTime() - hours * HOUR_MS);
 }
 
 export function resolvedRetentionDays(
@@ -36,6 +47,14 @@ export function resolvedRetentionDays(
   return Math.floor(configured);
 }
 
+export function resolvedIntermediateRetentionHours(
+  configured: number | undefined,
+  fallback = DEFAULT_INTERMEDIATE_RETENTION_HOURS,
+): number {
+  if (configured === undefined || !Number.isFinite(configured)) return fallback;
+  return Math.max(1, Math.floor(configured));
+}
+
 export async function runRetentionCleanup(
   ctx: Context,
   options: RetentionOptions = {},
@@ -44,14 +63,22 @@ export async function runRetentionCleanup(
   const retentionDays = resolvedRetentionDays(
     options.retentionDays ?? ctx.env.MEDIA_RETENTION_DAYS,
   );
+  const intermediateHours = resolvedIntermediateRetentionHours(
+    options.intermediateRetentionHours ??
+      ctx.env.MEDIA_INTERMEDIATE_RETENTION_HOURS,
+  );
   const cutoff = retentionCutoff(retentionDays, now);
+  const draftCutoff = intermediateCutoff(intermediateHours, now);
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
   const result: RetentionResult = {
     disabled: retentionDays <= 0,
     retentionDays,
     cutoff: cutoff.toISOString(),
+    intermediateRetentionHours: intermediateHours,
+    intermediateCutoff: draftCutoff.toISOString(),
     previewRendersDeleted: 0,
     orphanAssetsDeleted: 0,
+    intermediateAssetsDeleted: 0,
     filesDeleted: 0,
     errors: 0,
   };
@@ -103,7 +130,7 @@ export async function runRetentionCleanup(
   const previews = await ctx.db.renderedVideo.findMany({
     where: {
       kind: "PREVIEW",
-      createdAt: { lt: cutoff },
+      createdAt: { lt: draftCutoff },
       publishingJobs: { none: {} },
     },
     select: {
@@ -179,6 +206,43 @@ export async function runRetentionCleanup(
     if (!storage) continue;
     if (await deleteAsset(storage, asset)) {
       result.orphanAssetsDeleted += 1;
+    }
+  }
+
+  const intermediateAssets = await ctx.db.mediaAsset.findMany({
+    where: {
+      createdAt: { lt: draftCutoff },
+      status: { not: "DELETED" },
+      kind: { in: ["IMAGE", "VIDEO", "CLIP", "OTHER"] },
+      scenesUsingAsVisual: { none: {} },
+      scenesUsingAsNarration: { none: {} },
+      scenesUsingAsClip: { none: {} },
+      renderedVideos: { none: {} },
+      renderedThumbnails: { none: {} },
+      projectThumbnailFor: null,
+      OR: [
+        { expiresAt: { lt: now } },
+        { expiresAt: null, kind: "CLIP" },
+        { expiresAt: null, projectId: { not: null } },
+      ],
+    },
+    select: { id: true, userId: true, storageKey: true },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+
+  for (const asset of intermediateAssets) {
+    const storage = await storageFor(asset.userId).catch((error) => {
+      result.errors += 1;
+      ctx.logger.warn(
+        { error, userId: asset.userId },
+        "retention could not create storage service",
+      );
+      return null;
+    });
+    if (!storage) continue;
+    if (await deleteAsset(storage, asset)) {
+      result.intermediateAssetsDeleted += 1;
     }
   }
 

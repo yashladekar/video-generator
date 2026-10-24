@@ -8,6 +8,7 @@ import {
   runFfmpeg,
 } from "../lib/ffmpeg";
 import { MediaError } from "../lib/errors";
+import { RENDER_PROFILES, type RenderProfile } from "./render-profiles";
 
 export type RenderCaption = {
   path: string;
@@ -34,9 +35,7 @@ export type RenderInput = {
   scenes: RenderScene[];
   musicPath?: string | null;
   musicVolume?: number;
-  width: number;
-  height: number;
-  preview?: boolean;
+  profile?: RenderProfile;
   ffmpegPath?: string;
   ffprobePath?: string;
 };
@@ -49,6 +48,7 @@ export type RenderOutput = {
   height: number;
   fps: number;
   fileSizeBytes: number;
+  profile: RenderProfile["name"];
 };
 
 function motionFilter(
@@ -56,28 +56,33 @@ function motionFilter(
   width: number,
   height: number,
   duration: number,
+  fps: number,
 ): string {
-  const frames = Math.max(1, Math.round(duration * 30));
+  const frames = Math.max(1, Math.round(duration * fps));
   const center = `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
   const base = `scale=${Math.round(width * 1.08)}:${Math.round(height * 1.08)}:force_original_aspect_ratio=increase,crop=${Math.round(width * 1.08)}:${Math.round(height * 1.08)}`;
   if (motion === "zoom_out") {
-    return `${base},zoompan=z='max(1.06-0.00055*on,1)':${center}:d=1:s=${width}x${height}:fps=30,format=yuv420p`;
+    return `${base},zoompan=z='max(1.06-0.00055*on,1)':${center}:d=1:s=${width}x${height}:fps=${fps},format=yuv420p`;
   }
   if (motion === "pan_left" || motion === "pan_right") {
     const xExpr =
       motion === "pan_left"
         ? `x='(iw-iw/zoom)*(1-on/${frames})':y='ih/2-(ih/zoom/2)'`
         : `x='(iw-iw/zoom)*(on/${frames})':y='ih/2-(ih/zoom/2)'`;
-    return `${base},zoompan=z='1.04':${xExpr}:d=1:s=${width}x${height}:fps=30,format=yuv420p`;
+    return `${base},zoompan=z='1.04':${xExpr}:d=1:s=${width}x${height}:fps=${fps},format=yuv420p`;
   }
   if (motion === "static") {
-    return `${base},zoompan=z='1':${center}:d=1:s=${width}x${height}:fps=30,format=yuv420p`;
+    return `${base},zoompan=z='1':${center}:d=1:s=${width}x${height}:fps=${fps},format=yuv420p`;
   }
-  return `${base},zoompan=z='min(1+0.00045*on,1.06)':${center}:d=1:s=${width}x${height}:fps=30,format=yuv420p`;
+  return `${base},zoompan=z='min(1+0.00045*on,1.06)':${center}:d=1:s=${width}x${height}:fps=${fps},format=yuv420p`;
 }
 
-function buildSceneArgs(scene: RenderScene, input: RenderInput, outputPath: string): string[] {
-  const { width, height } = input;
+function buildSceneArgs(
+  scene: RenderScene,
+  profile: RenderProfile,
+  outputPath: string,
+): string[] {
+  const { width, height, fps } = profile;
   const duration = Math.max(0.5, scene.durationSeconds);
   const isVideo = scene.visualMimeType.startsWith("video/");
   const args: string[] = ["-y"];
@@ -85,22 +90,22 @@ function buildSceneArgs(scene: RenderScene, input: RenderInput, outputPath: stri
   if (isVideo) {
     args.push("-stream_loop", "-1", "-i", scene.visualPath);
   } else {
-    args.push("-loop", "1", "-framerate", "30", "-i", scene.visualPath);
+    args.push("-loop", "1", "-framerate", String(fps), "-i", scene.visualPath);
   }
   args.push("-i", scene.narrationPath);
 
   for (const caption of scene.captions) {
-    args.push("-loop", "1", "-framerate", "30", "-i", caption.path);
+    args.push("-loop", "1", "-framerate", String(fps), "-i", caption.path);
   }
 
   const filterParts: string[] = [];
   if (isVideo) {
     filterParts.push(
-      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=30,setpts=PTS-STARTPTS[base]`,
+      `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=${fps},setpts=PTS-STARTPTS[base]`,
     );
   } else {
     filterParts.push(
-      `[0:v]${motionFilter(scene.motion, width, height, duration)}[base]`,
+      `[0:v]${motionFilter(scene.motion, width, height, duration, fps)}[base]`,
     );
   }
 
@@ -137,19 +142,19 @@ function buildSceneArgs(scene: RenderScene, input: RenderInput, outputPath: stri
     "-t",
     duration.toFixed(3),
     "-r",
-    "30",
+    String(fps),
     "-c:v",
     "libx264",
     "-preset",
-    input.preview ? "ultrafast" : "veryfast",
+    profile.preset,
     "-crf",
-    input.preview ? "28" : "20",
+    String(profile.crf),
     "-pix_fmt",
     "yuv420p",
     "-c:a",
     "aac",
     "-b:a",
-    "192k",
+    profile.audioBitrate,
     "-ar",
     "48000",
     "-movflags",
@@ -163,6 +168,7 @@ export async function renderReel(input: RenderInput): Promise<RenderOutput> {
   if (input.scenes.length === 0) {
     throw new MediaError("RENDER_NO_SCENES", "No scenes to render");
   }
+  const profile = input.profile ?? RENDER_PROFILES.PRODUCTION;
   const scenePaths: string[] = [];
   let totalDuration = 0;
 
@@ -178,7 +184,7 @@ export async function renderReel(input: RenderInput): Promise<RenderOutput> {
       );
     }
     const scenePath = path.join(input.workDir, `scene-${scene.index}.mp4`);
-    const args = buildSceneArgs(scene, input, scenePath);
+    const args = buildSceneArgs(scene, profile, scenePath);
     await runFfmpeg(args, {
       ffmpegPath: input.ffmpegPath,
       timeoutMs: 10 * 60 * 1000,
@@ -212,13 +218,13 @@ export async function renderReel(input: RenderInput): Promise<RenderOutput> {
         "-c:v",
         "libx264",
         "-preset",
-        input.preview ? "ultrafast" : "veryfast",
+        profile.preset,
         "-crf",
-        input.preview ? "28" : "20",
+        String(profile.crf),
         "-c:a",
         "aac",
         "-b:a",
-        "192k",
+        profile.audioBitrate,
         "-pix_fmt",
         "yuv420p",
         basePath,
@@ -251,7 +257,7 @@ export async function renderReel(input: RenderInput): Promise<RenderOutput> {
         "-c:a",
         "aac",
         "-b:a",
-        "192k",
+        profile.audioBitrate,
         "-movflags",
         "+faststart",
         finalPath,
@@ -279,7 +285,7 @@ export async function renderReel(input: RenderInput): Promise<RenderOutput> {
       "-frames:v",
       "1",
       "-q:v",
-      "2",
+      profile.thumbnailQuality,
       thumbnailPath,
     ],
     { ffmpegPath: input.ffmpegPath, timeoutMs: 60_000 },
@@ -291,15 +297,17 @@ export async function renderReel(input: RenderInput): Promise<RenderOutput> {
   const fps =
     Number.isFinite(rateNumerator) && Number.isFinite(rateDenominator) && rateDenominator > 0
       ? rateNumerator / rateDenominator
-      : 30;
+      : profile.fps;
 
   return {
     filePath: finalPath,
     thumbnailPath,
     durationSeconds,
-    width: videoStream?.width ?? input.width,
-    height: videoStream?.height ?? input.height,
+    width: videoStream?.width ?? profile.width,
+    height: videoStream?.height ?? profile.height,
     fps,
     fileSizeBytes: await getFileSize(finalPath),
+    profile: profile.name,
   };
 }
+

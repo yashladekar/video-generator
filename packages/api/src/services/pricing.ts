@@ -4,6 +4,10 @@ import type { Context } from "../context";
 import { usdToPaise } from "../lib/money";
 import { fetchJson } from "../providers/http";
 import { resolveProviderChain } from "../providers/resolve";
+import {
+  DEFAULT_IMAGE_TO_VIDEO_MODEL,
+  DEFAULT_KEYFRAME_MODEL,
+} from "../providers/visual/model-tiers";
 import { getWaveSpeedPriceQuote } from "../providers/visual/wavespeed";
 
 const FREE_PROVIDERS = new Set([
@@ -356,7 +360,7 @@ export async function estimateGenerationCost(
     typeof imageResolved?.config.model === "string"
       ? imageResolved.config.model
       : imageProvider === "fal"
-        ? "fal-ai/flux/schnell"
+        ? DEFAULT_KEYFRAME_MODEL
         : imageProvider === "wavespeed"
           ? "wavespeed-ai/z-image/turbo"
           : undefined;
@@ -391,12 +395,12 @@ export async function estimateGenerationCost(
     );
     const resolved = chain.find((entry) => entry.provider === provider);
     const model =
-      typeof resolved?.config.model === "string"
-        ? resolved.config.model
+      typeof resolved?.config.imageToVideoModel === "string"
+        ? resolved.config.imageToVideoModel
         : provider === "fal"
-          ? "fal-ai/wan/v2.2-5b/text-to-video"
+          ? DEFAULT_IMAGE_TO_VIDEO_MODEL
           : provider === "wavespeed"
-            ? "pixverse/pixverse-v5.5/text-to-video"
+            ? "pixverse/pixverse-v5.5/image-to-video"
             : undefined;
     const seconds = settings.maxHostedVideoCalls * 5;
     categories.push({
@@ -411,8 +415,21 @@ export async function estimateGenerationCost(
         aspect_ratio: "9:16",
       },
     });
+    categories.push({
+      category: "IMAGE",
+      provider: provider ?? "fal",
+      unit: "image",
+      units: settings.maxHostedVideoCalls,
+      label: "Video keyframes",
+      model:
+        typeof resolved?.config.keyframeModel === "string"
+          ? resolved.config.keyframeModel
+          : provider === "fal"
+            ? DEFAULT_KEYFRAME_MODEL
+            : imageModel,
+    });
     assumptions.push(
-      `Hosted AI video is limited to ${settings.maxHostedVideoCalls} clip(s) of ~5s.`,
+      `Hosted AI video is limited to ${settings.maxHostedVideoCalls} clip(s) of ~5s, each animated from one cheap keyframe.`,
     );
   }
 

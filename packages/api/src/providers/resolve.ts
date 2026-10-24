@@ -3,6 +3,11 @@ import type { ProviderCategory } from "@video-generator/db";
 import type { Context } from "../context";
 import { decryptSecret } from "../lib/crypto";
 import { isPaidProvider } from "./catalog";
+import {
+  DEFAULT_IMAGE_TO_VIDEO_MODEL,
+  DEFAULT_KEYFRAME_MODEL,
+  DEFAULT_TEXT_TO_VIDEO_MODEL,
+} from "./visual/model-tiers";
 import type { ResolvedProvider } from "./types";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -129,8 +134,11 @@ function addFromEnv(
         {
           model:
             category === "IMAGE"
-              ? "fal-ai/flux/schnell"
-              : "fal-ai/wan/v2.2-5b/text-to-video",
+              ? DEFAULT_KEYFRAME_MODEL
+              : DEFAULT_TEXT_TO_VIDEO_MODEL,
+          ...(category === "IMAGE"
+            ? { keyframeModel: DEFAULT_KEYFRAME_MODEL }
+            : { imageToVideoModel: DEFAULT_IMAGE_TO_VIDEO_MODEL }),
         },
         { apiKey: env.FAL_KEY },
       ),

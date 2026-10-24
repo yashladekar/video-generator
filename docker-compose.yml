@@ -36,6 +36,7 @@ services:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
+      target: migrate
       secrets:
         - web_env
         - server_env
@@ -55,10 +56,13 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Gateway only: no FFmpeg, eSpeak, or fonts in this image. It stays small and
+  # is the only service that must be reachable from the internet.
   server:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
+      target: api
       secrets:
         - web_env
         - server_env
@@ -74,8 +78,7 @@ services:
       MEDIA_ROOT: /data/media
       PUBLIC_API_URL: http://localhost:3000
       CORS_ORIGIN: http://localhost:3001
-      FFMPEG_PATH: /usr/bin/ffmpeg
-      FFPROBE_PATH: /usr/bin/ffprobe
+      MEDIA_INTERMEDIATE_RETENTION_HOURS: "48"
     volumes:
       - media_data:/data/media
     depends_on:
@@ -97,12 +100,21 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
     restart: unless-stopped
 
+  # Rendering compute. This is the only service that needs the media toolchain,
+  # so it can be scaled to zero, pinned to one vCPU, or moved onto a pre-emptible
+  # instance without touching the API. It serves no inbound traffic.
   worker:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
+      target: worker
       secrets:
         - web_env
         - server_env
@@ -119,6 +131,7 @@ services:
       CORS_ORIGIN: http://localhost:3001
       FFMPEG_PATH: /usr/bin/ffmpeg
       FFPROBE_PATH: /usr/bin/ffprobe
+      MEDIA_INTERMEDIATE_RETENTION_HOURS: "48"
       WORKER_CONCURRENCY: "1"
     volumes:
       - media_data:/data/media
@@ -129,6 +142,11 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3G
     restart: unless-stopped
 
   web:

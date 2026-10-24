@@ -1,27 +1,50 @@
 import { readFile } from "node:fs/promises";
 
-import type { Prisma, Script, Scene, StepType } from "@video-generator/db";
+import type { MediaAsset, Prisma, Script, Scene, StepType } from "@video-generator/db";
 
 import type { Context } from "../context";
-import { AppError, CancelledError, MediaError, ValidationError } from "../lib/errors";
+import { AppError, BudgetError, CancelledError, MediaError, ValidationError } from "../lib/errors";
 import { cleanupDir, createTempDir } from "../lib/fs";
 import { hashCacheKey, extensionForMime } from "../lib/hash";
 import { toJsonValue } from "../lib/json";
 import { materializeAsset, mediaKey, storeAsset } from "./asset-store";
-import { isReusableStepStatus, latestStepsByType } from "./checkpoint";
-import { guardPaidCall, recordProviderUsage } from "./provider-usage";
+import {
+  isPaidStepType,
+  isReusableStepStatus,
+  latestStepsByType,
+  reusableStepFor,
+} from "./checkpoint";
+import {
+  assertVideoCostHeadroom,
+  guardPaidCall,
+  projectEstimatedCostInrPaise,
+  recordProviderUsage,
+  trackedPaidCall,
+} from "./provider-usage";
 import { renderReel, type RenderScene } from "./renderer";
+import { renderProfileFor } from "./render-profiles";
 import { generateSubtitles } from "./subtitles";
 import { validateRenderedVideo } from "./validate";
 import { ensureUserSettings } from "../services/budget";
 import { researchWithFallback } from "../providers/research/research";
 import { generateScriptWithFallback } from "../providers/llm";
 import { synthesizeWithFallback } from "../providers/tts";
+import { findCachedNarration, narrationCacheKeys } from "../providers/tts/cache";
 import {
+  generateHybridVideoWithFallback,
   generateImageWithFallback,
   generateVideoWithFallback,
+  imageToVideoProviders,
+  type GeneratedImage,
 } from "../providers/visual";
+import {
+  DEFAULT_IMAGE_TO_VIDEO_MODEL,
+  IMAGE_TO_VIDEO_MODELS,
+  estimateModelCostUsd,
+} from "../providers/visual/model-tiers";
+import { planSceneVisual } from "../providers/visual/tiers";
 import { renderProceduralMusic } from "../providers/music/procedural";
+import { isPaidProvider } from "../providers/catalog";
 import { resolveProviderChain } from "../providers/resolve";
 import {
   createStorageService,
@@ -180,6 +203,36 @@ function createRuntime(input: {
     }
     if (isReusableStepStatus(step.status)) {
       return (step.output as T) ?? (undefined as T);
+    }
+    if (isPaidStepType(type)) {
+      const attempts = await ctx.db.generationStep.findMany({
+        where: { jobId: job.id, type },
+      });
+      const recovered = reusableStepFor(attempts, type);
+      if (recovered) {
+        await ctx.db.generationStep.update({
+          where: { id: step.id },
+          data: {
+            status: "SKIPPED",
+            output:
+              recovered.output === null || recovered.output === undefined
+                ? undefined
+                : (recovered.output as Prisma.InputJsonValue),
+            startedAt: new Date(),
+            completedAt: new Date(),
+            durationMs: 0,
+            errorCode: null,
+            errorClass: null,
+            errorMessage: null,
+          },
+        });
+        ctx.logger.info(
+          { jobId: job.id, step: type, reusedAttempt: recovered.attempt },
+          "reused a completed provider step instead of calling the paid API again",
+        );
+        await updateProgress();
+        return (recovered.output as T) ?? (undefined as T);
+      }
     }
     await checkCancelled();
     await ctx.db.generationJob.update({
@@ -569,18 +622,23 @@ async function narrationStage(runtime: Runtime) {
       continue;
     }
     const voice = runtime.settings.defaultVoice ?? runtime.project.voice ?? undefined;
-    const cacheKey = hashCacheKey({
-      type: "narration",
+    const narrationParams = {
       text: scene.narration,
       voice,
       language: runtime.project.language,
-      preferredProvider: runtime.settings.preferredTtsProvider ?? "auto",
       speed: 1,
+      provider: runtime.settings.preferredTtsProvider ?? "auto",
+      format: "wav",
+    };
+    const cacheKeys = narrationCacheKeys(narrationParams, {
+      preferredProvider: runtime.settings.preferredTtsProvider ?? "auto",
     });
-    const cached = await runtime.ctx.db.mediaAsset.findUnique({
-      where: { cacheKey },
-    });
-    if (cached && cached.status === "READY") {
+    const cacheKey = cacheKeys[0]!;
+    const cached = await findCachedNarration(
+      runtime.ctx.db.mediaAsset,
+      cacheKeys,
+    );
+    if (cached) {
       await runtime.ctx.db.scene.update({
         where: { id: scene.id },
         data: { narrationAssetId: cached.id },
@@ -673,16 +731,23 @@ async function narrationStage(runtime: Runtime) {
         Math.max(1.02, item.audioDuration / item.plannedDuration + 0.02),
       );
       const voice = runtime.settings.defaultVoice ?? runtime.project.voice ?? undefined;
-      const cacheKey = hashCacheKey({
-        type: "narration",
-        text: item.scene.narration,
-        voice,
-        language: runtime.project.language,
-        preferredProvider: runtime.settings.preferredTtsProvider ?? "auto",
-        speed,
-      });
-      const cached = await runtime.ctx.db.mediaAsset.findUnique({ where: { cacheKey } });
-      if (cached && cached.status === "READY") {
+      const cacheKeys = narrationCacheKeys(
+        {
+          text: item.scene.narration,
+          voice,
+          language: runtime.project.language,
+          speed,
+          provider: runtime.settings.preferredTtsProvider ?? "auto",
+          format: "wav",
+        },
+        { preferredProvider: runtime.settings.preferredTtsProvider ?? "auto" },
+      );
+      const cacheKey = cacheKeys[0]!;
+      const cached = await findCachedNarration(
+        runtime.ctx.db.mediaAsset,
+        cacheKeys,
+      );
+      if (cached) {
         reworked.push({
           ...item,
           assetId: cached.id,
@@ -803,6 +868,186 @@ async function narrationStage(runtime: Runtime) {
   };
 }
 
+const KEYFRAME_PROVIDER_ORDER = ["fal", "wavespeed", "comfyui"];
+
+async function resolveChainSafely(
+  runtime: Runtime,
+  category: "IMAGE" | "TEXT_TO_VIDEO",
+): Promise<Awaited<ReturnType<typeof resolveProviderChain>>> {
+  return resolveProviderChain(
+    runtime.ctx,
+    runtime.job.userId,
+    category,
+    undefined,
+    { localOnly: runtime.settings.localOnly },
+  ).catch(() => []);
+}
+
+async function availableVisualProviders(runtime: Runtime) {
+  const [imageChain, videoChain] = await Promise.all([
+    resolveChainSafely(runtime, "IMAGE"),
+    resolveChainSafely(runtime, "TEXT_TO_VIDEO"),
+  ]);
+  const imageToVideoCapable = new Set(imageToVideoProviders());
+  const paidImages = imageChain
+    .filter((entry) => isPaidProvider(entry.provider))
+    .map((entry) => entry.provider);
+  return {
+    stockImages: imageChain
+      .filter((entry) => entry.provider === "pexels")
+      .map((entry) => entry.provider),
+    stockVideos: videoChain
+      .filter((entry) => entry.provider === "pexels")
+      .map((entry) => entry.provider),
+    images: KEYFRAME_PROVIDER_ORDER.filter((provider) =>
+      paidImages.includes(provider),
+    ).concat(paidImages.filter((provider) => !KEYFRAME_PROVIDER_ORDER.includes(provider))),
+    videos: videoChain
+      .filter(
+        (entry) =>
+          isPaidProvider(entry.provider) &&
+          imageToVideoCapable.has(entry.provider),
+      )
+      .map((entry) => entry.provider),
+  };
+}
+
+async function sceneVisualPlan(
+  runtime: Runtime,
+  scene: Scene,
+  options?: { allowPaidVideo?: boolean },
+) {
+  const available = await availableVisualProviders(runtime);
+  const pinned =
+    scene.visualType === "AI_IMAGE" || scene.visualType === "AI_VIDEO"
+      ? runtime.settings.preferredVisualProvider
+      : null;
+  return planSceneVisual({
+    visualType: scene.visualType,
+    preferredProvider: pinned,
+    localOnly: runtime.settings.localOnly,
+    stockProviders:
+      scene.visualType === "STOCK_VIDEO"
+        ? available.stockVideos
+        : available.stockImages,
+    imageProviders: available.images,
+    videoProviders: available.videos,
+    allowPaidVideo: options?.allowPaidVideo ?? false,
+  });
+}
+
+async function generateSceneImage(
+  runtime: Runtime,
+  input: {
+    plan: Awaited<ReturnType<typeof planSceneVisual>>;
+    scene: Scene;
+    prompt: string;
+    width: number;
+    height: number;
+    seed?: number;
+  },
+): Promise<GeneratedImage> {
+  const tiers = runtime.settings.autoFallback
+    ? input.plan
+    : input.plan.slice(0, 1);
+  let lastError: unknown;
+  for (const tier of tiers) {
+    await runtime.checkCancelled();
+    const resolved = await resolveProviderChain(
+      runtime.ctx,
+      runtime.job.userId,
+      "IMAGE",
+      tier.provider,
+      { localOnly: runtime.settings.localOnly },
+    ).catch(() => []);
+    const configured =
+      resolved.find((entry) => entry.provider === tier.provider) ?? resolved[0];
+    const model =
+      typeof configured?.config.model === "string"
+        ? configured.config.model
+        : undefined;
+    const seed = input.seed ?? input.scene.sceneNumber * 7919;
+    try {
+      await guardPaidCall(
+        runtime.ctx,
+        runtime.job.userId,
+        tier.provider,
+        "IMAGE",
+        model,
+        "image",
+        undefined,
+        {
+          jobId: runtime.job.id,
+          units: 1,
+          label: `Scene ${input.scene.sceneNumber} still (${tier.tier})`,
+          settings: runtime.settings,
+        },
+      );
+      return await trackedPaidCall(
+        runtime.ctx,
+        {
+          userId: runtime.job.userId,
+          projectId: runtime.project.id,
+          jobId: runtime.job.id,
+          provider: tier.provider,
+          model,
+          category: "IMAGE",
+          idempotencyKey: "VISUALS:image",
+          request: {
+            sceneId: input.scene.id,
+            tier: tier.tier,
+            prompt: input.prompt,
+            width: input.width,
+            height: input.height,
+            seed,
+          },
+        },
+        () =>
+          generateImageWithFallback(
+            runtime.ctx,
+            runtime.job.userId,
+            {
+              prompt: input.prompt,
+              width: input.width,
+              height: input.height,
+              style: runtime.project.visualStyle,
+              seed,
+              model,
+            },
+            {
+              preferredProvider: tier.provider,
+              localOnly: runtime.settings.localOnly,
+              autoFallback: false,
+              signal: runtime.signal,
+            },
+          ),
+      );
+    } catch (error) {
+      lastError = error;
+      if (
+        error instanceof BudgetError ||
+        error instanceof CancelledError
+      ) {
+        throw error;
+      }
+      runtime.ctx.logger.warn(
+        {
+          tier: tier.tier,
+          provider: tier.provider,
+          sceneId: input.scene.id,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "visual tier failed; trying the next cheapest source",
+      );
+    }
+  }
+  if (lastError instanceof Error) throw lastError;
+  throw new MediaError(
+    "NO_VISUAL_TIER",
+    `No visual source could produce an image for scene ${input.scene.sceneNumber}`,
+  );
+}
+
 async function visualsStage(runtime: Runtime) {
   await runtime.checkCancelled();
   const script = await requireLatestScript(runtime);
@@ -811,7 +1056,7 @@ async function visualsStage(runtime: Runtime) {
     orderBy: { orderIndex: "asc" },
     include: { visualAsset: true },
   });
-  const { width, height } = outputDimensions(runtime.project.resolution, false);
+  const { width, height } = outputDimensions(runtime.project.resolution);
   const results: Array<{
     sceneId: string;
     assetId: string;
@@ -833,12 +1078,6 @@ async function visualsStage(runtime: Runtime) {
       continue;
     }
 
-    const preferred =
-      scene.visualType === "STOCK_IMAGE"
-        ? "pexels"
-        : scene.visualType === "AI_IMAGE"
-          ? runtime.settings.preferredVisualProvider
-          : "procedural";
     const prompt = `${scene.visualDescription}. Vertical 9:16 composition, ${runtime.project.visualStyle} style, cinematic lighting, no embedded text.`;
 
     if (scene.visualType === "STOCK_VIDEO") {
@@ -924,49 +1163,20 @@ async function visualsStage(runtime: Runtime) {
       }
     }
 
-    const chain = await resolveProviderChain(
-      runtime.ctx,
-      runtime.job.userId,
-      "IMAGE",
-      preferred,
-      { localOnly: runtime.settings.localOnly },
-    );
-    const first = chain[0];
-    if (first) {
-      const model =
-        typeof first.config.model === "string" ? first.config.model : undefined;
-      await guardPaidCall(
-        runtime.ctx,
-        runtime.job.userId,
-        first.provider,
-        "IMAGE",
-        model,
-        "image",
-      );
-    }
-    const image = await generateImageWithFallback(
-      runtime.ctx,
-      runtime.job.userId,
-      {
-        prompt,
-        width,
-        height,
-        style: runtime.project.visualStyle,
-        seed: scene.sceneNumber * 7919,
-      },
-      {
-        preferredProvider: preferred,
-        localOnly: runtime.settings.localOnly,
-        autoFallback: runtime.settings.autoFallback,
-        signal: runtime.signal,
-      },
-    );
+    const plan = await sceneVisualPlan(runtime, scene);
+    const image = await generateSceneImage(runtime, {
+      plan,
+      scene,
+      prompt,
+      width,
+      height,
+    });
     const cacheKey = hashCacheKey({
       type: "image",
       prompt,
       width,
       height,
-      preferredProvider: preferred ?? "auto",
+      preferredProvider: image.provider,
     });
     const extension = extensionForMime(image.mimeType);
     const key = mediaKey(
@@ -1025,6 +1235,136 @@ async function visualsStage(runtime: Runtime) {
   return { scenes: results, warnings };
 }
 
+type SceneWithVisual = Scene & { visualAsset: MediaAsset | null };
+
+type SceneKeyframe = {
+  asset: MediaAsset;
+  data: Buffer;
+  mimeType: string;
+  provider: string;
+  requestId?: string;
+  origin: "existing" | "cache" | "generated";
+};
+
+/**
+ * Produces the cheap base still that the turbo image-to-video model animates.
+ * An existing scene image is reused first, then a cached keyframe, and only
+ * then is a paid keyframe generated. The still is persisted as the scene's
+ * visual immediately, so a later video failure never wastes it.
+ */
+async function ensureSceneKeyframe(
+  runtime: Runtime,
+  input: {
+    scene: SceneWithVisual;
+    prompt: string;
+    width: number;
+    height: number;
+    plan: Awaited<ReturnType<typeof planSceneVisual>>;
+  },
+): Promise<SceneKeyframe> {
+  const { scene } = input;
+  const existing = scene.visualAsset;
+  if (existing?.status === "READY" && existing.kind === "IMAGE") {
+    const data = await runtime.storage.get(existing.storageKey);
+    return {
+      asset: existing,
+      data,
+      mimeType: existing.mimeType,
+      provider: existing.provider ?? "existing",
+      requestId: existing.providerRequestId ?? undefined,
+      origin: "existing",
+    };
+  }
+
+  const cacheKey = hashCacheKey({
+    type: "keyframe",
+    prompt: input.prompt,
+    width: input.width,
+    height: input.height,
+  });
+  const cached = await runtime.ctx.db.mediaAsset.findUnique({
+    where: { cacheKey },
+  });
+  if (cached && cached.status === "READY") {
+    await runtime.ctx.db.scene.update({
+      where: { id: scene.id },
+      data: { visualAssetId: cached.id, status: "ASSETS_READY" },
+    });
+    return {
+      asset: cached,
+      data: await runtime.storage.get(cached.storageKey),
+      mimeType: cached.mimeType,
+      provider: cached.provider ?? "cache",
+      requestId: cached.providerRequestId ?? undefined,
+      origin: "cache",
+    };
+  }
+
+  const image = await generateSceneImage(runtime, {
+    plan: input.plan,
+    scene,
+    prompt: input.prompt,
+    width: input.width,
+    height: input.height,
+    seed: scene.sceneNumber * 104729,
+  });
+  const extension = extensionForMime(image.mimeType);
+  const asset = await storeAsset(runtime.ctx, {
+    userId: runtime.job.userId,
+    projectId: runtime.project.id,
+    kind: "IMAGE",
+    source: IMAGE_SOURCE[image.provider] ?? "OTHER",
+    storageKey: mediaKey(
+      runtime.project.id,
+      "visuals",
+      `scene-${scene.sceneNumber}-keyframe-${cacheKey.slice(0, 12)}.${extension}`,
+    ),
+    data: image.image,
+    mimeType: image.mimeType,
+    width: image.width ?? input.width,
+    height: image.height ?? input.height,
+    attribution: image.attribution,
+    provider: image.provider,
+    providerModel:
+      typeof image.resolvedProvider.config.model === "string"
+        ? image.resolvedProvider.config.model
+        : undefined,
+    providerRequestId: image.requestId,
+    cacheKey,
+    metadata: { keyframe: true },
+    storage: runtime.storage,
+  });
+  await runtime.ctx.db.scene.update({
+    where: { id: scene.id },
+    data: { visualAssetId: asset.id, status: "ASSETS_READY" },
+  });
+  await recordProviderUsage(runtime.ctx, {
+    userId: runtime.job.userId,
+    projectId: runtime.project.id,
+    jobId: runtime.job.id,
+    provider: image.provider,
+    category: "IMAGE",
+    model:
+      typeof image.resolvedProvider.config.model === "string"
+        ? image.resolvedProvider.config.model
+        : undefined,
+    units: 1,
+    unit: "image",
+    providerRequestId: image.requestId,
+    usage: image.usage,
+    settings: runtime.settings,
+    metadata: { role: "video-keyframe" },
+  });
+  return {
+    asset,
+    data: image.image,
+    mimeType: image.mimeType,
+    provider: image.provider,
+    requestId: image.requestId,
+    origin: "generated",
+  };
+}
+
 async function aiVideoStage(runtime: Runtime) {
   const preferred = runtime.settings.preferredVideoProvider;
   if (
@@ -1039,16 +1379,23 @@ async function aiVideoStage(runtime: Runtime) {
       reason: "Hosted AI video is not selected for this project",
     };
   }
-  const chain = await resolveProviderChain(
-    runtime.ctx,
-    runtime.job.userId,
-    "TEXT_TO_VIDEO",
-    preferred,
-    { localOnly: runtime.settings.localOnly },
-  );
-  if (chain.length === 0) {
-    return { skipped: true, reason: "No video provider is configured" };
+  const available = await availableVisualProviders(runtime);
+  if (available.videos.length === 0) {
+    return {
+      skipped: true,
+      reason:
+        "No configured video provider supports the turbo image-to-video workflow",
+    };
   }
+  const videoProvider = available.videos.includes(preferred)
+    ? preferred
+    : available.videos[0]!;
+  const chain = await resolveChainSafely(runtime, "TEXT_TO_VIDEO");
+  const resolved = chain.find((entry) => entry.provider === videoProvider);
+  const model =
+    typeof resolved?.config.imageToVideoModel === "string"
+      ? resolved.config.imageToVideoModel
+      : DEFAULT_IMAGE_TO_VIDEO_MODEL;
 
   const script = await requireLatestScript(runtime);
   const scenes = await runtime.ctx.db.scene.findMany({
@@ -1057,11 +1404,11 @@ async function aiVideoStage(runtime: Runtime) {
     include: { visualAsset: true },
   });
   const limit = runtime.settings.maxHostedVideoCalls;
-  const selected: Scene[] = scenes
+  const selected: SceneWithVisual[] = scenes
     .filter((scene) => scene.visualType === "AI_VIDEO")
     .slice(0, limit);
   if (selected.length < limit) {
-    const candidates: Scene[] = [];
+    const candidates: SceneWithVisual[] = [];
     const firstScene = scenes[0];
     const lastScene = scenes[scenes.length - 1];
     if (firstScene) candidates.push(firstScene);
@@ -1072,47 +1419,123 @@ async function aiVideoStage(runtime: Runtime) {
     }
   }
 
-  const { width, height } = outputDimensions(runtime.project.resolution, false);
+  const { width, height } = outputDimensions(runtime.project.resolution);
   const warnings: string[] = [];
   const results: Array<{ sceneId: string; assetId: string; provider: string }> = [];
 
   for (const scene of selected) {
     await runtime.checkCancelled();
-    const first = chain[0];
-    if (!first) continue;
-    const model =
-      typeof first.config.model === "string" ? first.config.model : undefined;
+    const prompt = `${scene.visualDescription}. Vertical 9:16, ${runtime.project.visualStyle}, cinematic motion, no text.`;
+    const seconds = Math.min(5, scene.durationSeconds);
+    const previousVisualAssetId = scene.visualAsset?.id ?? null;
+    const estimatedUsd =
+      estimateModelCostUsd(model, seconds, IMAGE_TO_VIDEO_MODELS) ?? 0;
     try {
+      await assertVideoCostHeadroom(runtime.ctx, {
+        userId: runtime.job.userId,
+        jobId: runtime.job.id,
+        provider: videoProvider,
+        model,
+        label: `AI video for scene ${scene.sceneNumber}`,
+        limitInrPaise: runtime.settings.maxCostPerVideoInrPaise,
+        projectedInrPaise: projectEstimatedCostInrPaise(
+          estimatedUsd,
+          runtime.settings,
+        ),
+      });
+    } catch (error) {
+      if (error instanceof BudgetError) {
+        warnings.push(
+          `Stopped paid video clips before scene ${scene.sceneNumber}: ${error.message}`,
+        );
+        break;
+      }
+      throw error;
+    }
+
+    try {
+      const plan = await sceneVisualPlan(runtime, scene);
+      const keyframe = await ensureSceneKeyframe(runtime, {
+        scene,
+        prompt,
+        width,
+        height,
+        plan,
+      });
+      if (keyframe.provider === "procedural") {
+        warnings.push(
+          `Scene ${scene.sceneNumber}: no keyframe-capable image provider, so the scene keeps its procedural still instead of paying for a clip animated from a text card.`,
+        );
+        continue;
+      }
       await guardPaidCall(
         runtime.ctx,
         runtime.job.userId,
-        first.provider,
+        videoProvider,
         "TEXT_TO_VIDEO",
         model,
         "second",
-        { duration: 5, aspect_ratio: "9:16" },
+        { duration: seconds, aspect_ratio: "9:16" },
+        {
+          jobId: runtime.job.id,
+          units: seconds,
+          label: `AI video for scene ${scene.sceneNumber}`,
+          settings: runtime.settings,
+        },
       );
-      const video = await generateVideoWithFallback(
+      const { video } = await trackedPaidCall(
         runtime.ctx,
-        runtime.job.userId,
         {
-          prompt: `${scene.visualDescription}. Vertical 9:16, ${runtime.project.visualStyle}, cinematic motion, no text.`,
-          durationSeconds: Math.min(5, scene.durationSeconds),
-          aspectRatio: "9:16",
-          width,
-          height,
+          userId: runtime.job.userId,
+          projectId: runtime.project.id,
+          jobId: runtime.job.id,
+          provider: videoProvider,
+          model,
+          category: "TEXT_TO_VIDEO",
+          idempotencyKey: "AI_VIDEO:image-to-video",
+          request: {
+            sceneId: scene.id,
+            keyframeStorageKey: keyframe.asset.storageKey,
+            prompt,
+            seconds,
+            model,
+          },
         },
-        {
-          preferredProvider: preferred,
-          localOnly: runtime.settings.localOnly,
-          autoFallback: runtime.settings.autoFallback,
-          signal: runtime.signal,
-        },
+        () =>
+          generateHybridVideoWithFallback(
+            runtime.ctx,
+            runtime.job.userId,
+            {
+              prompt,
+              durationSeconds: seconds,
+              aspectRatio: "9:16",
+              width,
+              height,
+              style: runtime.project.visualStyle,
+              motion: scene.motion ?? undefined,
+              model,
+              keyframe: {
+                data: keyframe.data,
+                mimeType: keyframe.mimeType,
+                provider: keyframe.provider,
+                requestId: keyframe.requestId,
+              },
+            },
+            {
+              preferredImageProvider: videoProvider,
+              preferredVideoProvider: videoProvider,
+              localOnly: runtime.settings.localOnly,
+              autoFallback: runtime.settings.autoFallback,
+              signal: runtime.signal,
+            },
+          ),
       );
       const cacheKey = hashCacheKey({
         type: "ai-video",
         prompt: scene.visualDescription,
         provider: video.provider,
+        model,
+        keyframe: keyframe.asset.storageKey,
         width,
         height,
       });
@@ -1135,7 +1558,12 @@ async function aiVideoStage(runtime: Runtime) {
         providerModel: model,
         providerRequestId: video.requestId,
         cacheKey,
-        metadata: { aiVideo: true },
+        metadata: {
+          aiVideo: true,
+          workflow: "image-to-video",
+          keyframeAssetId: keyframe.asset.id,
+          keyframeOrigin: keyframe.origin,
+        },
         storage: runtime.storage,
       });
       await runtime.ctx.db.scene.update({
@@ -1143,7 +1571,7 @@ async function aiVideoStage(runtime: Runtime) {
         data: {
           visualAssetId: asset.id,
           status: "READY",
-          metadata: { aiVideo: true },
+          metadata: { aiVideo: true, workflow: "image-to-video" },
         },
       });
       await recordProviderUsage(runtime.ctx, {
@@ -1153,11 +1581,12 @@ async function aiVideoStage(runtime: Runtime) {
         provider: video.provider,
         category: "TEXT_TO_VIDEO",
         model,
-        units: video.durationSeconds ?? Math.min(5, scene.durationSeconds),
+        units: video.durationSeconds ?? seconds,
         unit: "second",
         providerRequestId: video.requestId,
         usage: video.usage,
         settings: runtime.settings,
+        metadata: { workflow: "image-to-video" },
       });
       results.push({
         sceneId: scene.id,
@@ -1165,69 +1594,31 @@ async function aiVideoStage(runtime: Runtime) {
         provider: video.provider,
       });
     } catch (error) {
+      if (error instanceof BudgetError && error.code === "PER_VIDEO_COST_LIMIT") {
+        warnings.push(
+          `Stopped paid video clips after scene ${scene.sceneNumber}: ${error.message}`,
+        );
+        break;
+      }
       if (!runtime.settings.autoFallback) throw error;
-      warnings.push(
-        `Scene ${scene.sceneNumber}: AI video failed, falling back to an image. ${error instanceof Error ? error.message : String(error)}`,
-      );
-      try {
-        const image = await generateImageWithFallback(
-          runtime.ctx,
-          runtime.job.userId,
-          {
-            prompt: `${scene.visualDescription}. Vertical 9:16, ${runtime.project.visualStyle}, no text.`,
-            width,
-            height,
-            style: runtime.project.visualStyle,
-            seed: scene.sceneNumber * 104729,
-          },
-          {
-            preferredProvider: "procedural",
-            localOnly: true,
-            autoFallback: true,
-            signal: runtime.signal,
-          },
-        );
-        const key = mediaKey(
-          runtime.project.id,
-          "visuals",
-          `scene-${scene.sceneNumber}-fallback.png`,
-        );
-        const asset = await storeAsset(runtime.ctx, {
-          userId: runtime.job.userId,
-          projectId: runtime.project.id,
-          kind: "IMAGE",
-          source: "PROCEDURAL",
-          storageKey: key.replace(/\.png$/, ".jpg"),
-          data: image.image,
-          mimeType: image.mimeType,
-          width: image.width,
-          height: image.height,
-          provider: image.provider,
-          metadata: { aiVideoFallback: true },
-          storage: runtime.storage,
-        });
+      if (scene.visualType !== "AI_VIDEO" && previousVisualAssetId) {
         await runtime.ctx.db.scene.update({
           where: { id: scene.id },
-          data: {
-            visualAssetId: asset.id,
-            status: "READY",
-            metadata: { aiVideoFallback: true },
-          },
+          data: { visualAssetId: previousVisualAssetId },
         });
-        results.push({
-          sceneId: scene.id,
-          assetId: asset.id,
-          provider: image.provider,
-        });
-      } catch (fallbackError) {
-        warnings.push(
-          `Scene ${scene.sceneNumber}: fallback image also failed. ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
-        );
       }
+      warnings.push(
+        `Scene ${scene.sceneNumber}: hosted video failed, keeping the cheap keyframe still instead. ${error instanceof Error ? error.message : String(error)}`,
+      );
+      results.push({
+        sceneId: scene.id,
+        assetId: scene.visualAsset?.id ?? previousVisualAssetId ?? "",
+        provider: "keyframe",
+      });
     }
   }
 
-  return { selected: results, warnings };
+  return { selected: results, warnings, model, provider: videoProvider };
 }
 
 async function subtitlesStage(runtime: Runtime) {
@@ -1313,12 +1704,13 @@ async function renderStage(runtime: Runtime) {
     >;
   }>("SUBTITLES");
   const music = await runtime.getOutput<{ assetId?: string; key?: string }>("MUSIC");
-  const preview =
-    runtime.job.kind === "RENDER" && runtime.renderKind === "PREVIEW";
-  const { width, height } = outputDimensions(
-    runtime.project.resolution,
-    preview,
-  );
+  const renderKind: "PREVIEW" | "FINAL" =
+    runtime.job.kind === "RENDER" && runtime.renderKind === "PREVIEW"
+      ? "PREVIEW"
+      : "FINAL";
+  const profile = renderProfileFor(renderKind, {
+    resolution: runtime.project.resolution,
+  });
   const renderScenes: RenderScene[] = [];
 
   for (const [index, scene] of scenes.entries()) {
@@ -1393,16 +1785,14 @@ async function renderStage(runtime: Runtime) {
     scenes: renderScenes,
     musicPath,
     musicVolume: runtime.project.musicVolume,
-    width,
-    height,
-    preview,
+    profile,
     ffmpegPath: runtime.ctx.env.FFMPEG_PATH,
     ffprobePath: runtime.ctx.env.FFPROBE_PATH,
   });
 
   const videoData = await readFile(rendered.filePath);
   const thumbData = await readFile(rendered.thumbnailPath);
-  const kind = preview ? "PREVIEW" : "FINAL";
+  const kind = renderKind;
   const videoKey = mediaKey(
     runtime.project.id,
     "renders",
@@ -1494,7 +1884,8 @@ async function renderStage(runtime: Runtime) {
     height: rendered.height,
     fps: rendered.fps,
     fileSizeBytes: rendered.fileSizeBytes,
-    preview,
+    preview: renderKind === "PREVIEW",
+    profile: rendered.profile,
   };
 }
 
@@ -1657,7 +2048,7 @@ async function regenerateVisual(runtime: Runtime, sceneId: string) {
   if (!scene || scene.script.project.userId !== runtime.job.userId) {
     throw new ValidationError("Target scene not found");
   }
-  const { width, height } = outputDimensions(scene.script.project.resolution, false);
+  const { width, height } = outputDimensions(scene.script.project.resolution);
   const preferred =
     scene.visualType === "STOCK_IMAGE"
       ? "pexels"
@@ -1671,52 +2062,98 @@ async function regenerateVisual(runtime: Runtime, sceneId: string) {
   if (scene.visualType === "AI_VIDEO") {
     try {
     const videoPreferred = runtime.settings.preferredVideoProvider;
+    const available = await availableVisualProviders(runtime);
     if (
       videoPreferred &&
       videoPreferred !== "auto" &&
       videoPreferred !== "none" &&
-      !runtime.settings.localOnly
+      !runtime.settings.localOnly &&
+      available.videos.length > 0
     ) {
-      const chain = await resolveProviderChain(
-        runtime.ctx,
-        runtime.job.userId,
-        "TEXT_TO_VIDEO",
-        videoPreferred,
-      );
-      const first = chain[0];
+      const videoProvider = available.videos.includes(videoPreferred)
+        ? videoPreferred
+        : available.videos[0]!;
+      const chain = await resolveChainSafely(runtime, "TEXT_TO_VIDEO");
+      const first = chain.find((entry) => entry.provider === videoProvider);
       if (first) {
         const model =
-          typeof first.config.model === "string" ? first.config.model : undefined;
+          typeof first.config.imageToVideoModel === "string"
+            ? first.config.imageToVideoModel
+            : DEFAULT_IMAGE_TO_VIDEO_MODEL;
+        const seconds = Math.min(5, scene.durationSeconds);
+        await assertVideoCostHeadroom(runtime.ctx, {
+          userId: runtime.job.userId,
+          jobId: runtime.job.id,
+          provider: videoProvider,
+          model,
+          label: `Regenerated video for scene ${scene.sceneNumber}`,
+          limitInrPaise: runtime.settings.maxCostPerVideoInrPaise,
+          projectedInrPaise: projectEstimatedCostInrPaise(
+            estimateModelCostUsd(model, seconds, IMAGE_TO_VIDEO_MODELS) ?? 0,
+            runtime.settings,
+          ),
+        });
         await guardPaidCall(
           runtime.ctx,
           runtime.job.userId,
-          first.provider,
+          videoProvider,
           "TEXT_TO_VIDEO",
           model,
           "second",
-          { duration: 5, aspect_ratio: "9:16" },
+          { duration: seconds, aspect_ratio: "9:16" },
+          {
+            jobId: runtime.job.id,
+            units: seconds,
+            label: `Regenerated video for scene ${scene.sceneNumber}`,
+            settings: runtime.settings,
+          },
         );
-        const video = await generateVideoWithFallback(
+        const { video, keyframeProvider, keyframeReused } = await trackedPaidCall(
           runtime.ctx,
-          runtime.job.userId,
           {
-            prompt,
-            durationSeconds: Math.min(5, scene.durationSeconds),
-            aspectRatio: "9:16",
-            width,
-            height,
+            userId: runtime.job.userId,
+            projectId: scene.script.projectId,
+            jobId: runtime.job.id,
+            provider: videoProvider,
+            model,
+            category: "TEXT_TO_VIDEO",
+            idempotencyKey: "REGENERATE:image-to-video",
+            request: {
+              sceneId: scene.id,
+              prompt,
+              seconds,
+              model,
+              jobId: runtime.job.id,
+            },
           },
-          {
-            preferredProvider: videoPreferred,
-            localOnly: runtime.settings.localOnly,
-            autoFallback: runtime.settings.autoFallback,
-            signal: runtime.signal,
-          },
+          () =>
+            generateHybridVideoWithFallback(
+              runtime.ctx,
+              runtime.job.userId,
+              {
+                prompt,
+                durationSeconds: seconds,
+                aspectRatio: "9:16",
+                width,
+                height,
+                style: scene.script.project.visualStyle,
+                motion: scene.motion ?? undefined,
+                model,
+              },
+              {
+                preferredImageProvider: videoProvider,
+                preferredVideoProvider: videoProvider,
+                localOnly: runtime.settings.localOnly,
+                autoFallback: runtime.settings.autoFallback,
+                signal: runtime.signal,
+              },
+            ),
         );
         const cacheKey = hashCacheKey({
           type: "ai-video",
           prompt,
           provider: video.provider,
+          model,
           width,
           height,
           regenerate: runtime.job.id,
@@ -1759,7 +2196,21 @@ async function regenerateVisual(runtime: Runtime, sceneId: string) {
           providerRequestId: video.requestId,
           usage: video.usage,
           settings: runtime.settings,
+          metadata: { workflow: "image-to-video", regenerated: true },
         });
+        if (!keyframeReused) {
+          await recordProviderUsage(runtime.ctx, {
+            userId: runtime.job.userId,
+            projectId: scene.script.projectId,
+            jobId: runtime.job.id,
+            provider: keyframeProvider,
+            category: "IMAGE",
+            units: 1,
+            unit: "image",
+            settings: runtime.settings,
+            metadata: { role: "video-keyframe", regenerated: true },
+          });
+        }
         return { sceneId, assetId: asset.id, regeneration: "video" };
       }
     }
@@ -1918,11 +2369,7 @@ async function requireLatestScript(runtime: Runtime) {
   return script as Script & { scenes: Scene[] };
 }
 
-function outputDimensions(
-  resolution: string,
-  preview: boolean,
-): { width: number; height: number } {
-  if (preview) return { width: 540, height: 960 };
+function outputDimensions(resolution: string): { width: number; height: number } {
   return resolution === "720p"
     ? { width: 720, height: 1280 }
     : { width: 1080, height: 1920 };

@@ -26,14 +26,14 @@
     "auth:generate": "cd apps/server && pnpm run auth:generate"
   },
   "dependencies": {
+    "varlock": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "@video-generator/config": "workspace:*",
     "turbo": "^2.11.7",
-    "typescript": "catalog:",
-    "varlock": "catalog:"
+    "typescript": "catalog:"
   },
   "packageManager": "pnpm@12.11.2"
 }

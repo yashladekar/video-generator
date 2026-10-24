@@ -112,6 +112,13 @@ export type ImageGenerateOutput = {
   provider: string;
 };
 
+export type VideoKeyframe = {
+  data: Buffer;
+  mimeType: string;
+  provider?: string;
+  requestId?: string;
+};
+
 export type VideoGenerateInput = {
   prompt: string;
   durationSeconds: number;
@@ -119,7 +126,17 @@ export type VideoGenerateInput = {
   width: number;
   height: number;
   model?: string;
+  image?: VideoKeyframe;
+  motion?: string;
 };
+
+export type VideoGenerationMode = "IMAGE_TO_VIDEO" | "TEXT_TO_VIDEO";
+
+export function videoGenerationMode(
+  input: Pick<VideoGenerateInput, "image">,
+): VideoGenerationMode {
+  return input.image ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
+}
 
 export type VideoGenerateOutput = {
   video: Buffer;
@@ -198,6 +215,7 @@ export interface ImageProvider {
 
 export interface VideoProvider {
   provider: string;
+  supportsImageToVideo?: boolean;
   generateVideo(
     input: VideoGenerateInput,
     resolved: ResolvedProvider,

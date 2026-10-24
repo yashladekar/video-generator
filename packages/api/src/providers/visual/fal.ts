@@ -19,6 +19,11 @@ import type {
   VideoGenerateOutput,
   VideoProvider,
 } from "../types";
+import {
+  DEFAULT_IMAGE_TO_VIDEO_MODEL,
+  DEFAULT_KEYFRAME_MODEL,
+  DEFAULT_TEXT_TO_VIDEO_MODEL,
+} from "./model-tiers";
 
 type FalSubmitResponse = {
   request_id?: string;
@@ -51,6 +56,10 @@ function requireKey(resolved: ResolvedProvider, ctx: ProviderCallContext): strin
   return apiKey;
 }
 
+export function toDataUri(data: Buffer, mimeType: string): string {
+  return `data:${mimeType};base64,${data.toString("base64")}`;
+}
+
 function inputFor(
   input: ImageGenerateInput | VideoGenerateInput,
   resolved: ResolvedProvider,
@@ -76,9 +85,46 @@ function inputFor(
     values.duration = input.durationSeconds;
     values.duration_seconds = input.durationSeconds;
   }
-  return template
-    ? (substituteTemplate(template, values) as Record<string, unknown>)
+  if ("motion" in input && input.motion) {
+    values.motion = input.motion;
+  }
+  const keyframe = "image" in input ? input.image : undefined;
+  if (keyframe) {
+    values.image_url = toDataUri(keyframe.data, keyframe.mimeType);
+    values.imageUrl = values.image_url;
+    values.image = values.image_url;
+  }
+  if (template) {
+    const substituted = substituteTemplate(template, values) as Record<
+      string,
+      unknown
+    >;
+    if (keyframe && !("image_url" in substituted)) {
+      substituted.image_url = values.image_url;
+    }
+    return substituted;
+  }
+  return keyframe
+    ? { prompt: input.prompt, image_url: values.image_url }
     : { prompt: input.prompt };
+}
+
+export function falVideoModelFor(
+  input: VideoGenerateInput,
+  resolved: ResolvedProvider,
+): string {
+  if (input.model) return input.model;
+  if (input.image) {
+    return (
+      configString(resolved, "imageToVideoModel") ??
+      DEFAULT_IMAGE_TO_VIDEO_MODEL
+    );
+  }
+  return (
+    configString(resolved, "model") ??
+    configString(resolved, "textToVideoModel") ??
+    DEFAULT_TEXT_TO_VIDEO_MODEL
+  );
 }
 
 async function submitAndPoll(
@@ -193,7 +239,8 @@ export const falImageProvider: ImageProvider = {
   ): Promise<ImageGenerateOutput> {
     const model =
       input.model ??
-      configString(resolved, "model", "fal-ai/flux/schnell")!;
+      configString(resolved, "keyframeModel") ??
+      configString(resolved, "model", DEFAULT_KEYFRAME_MODEL)!;
     const { result, requestId } = await submitAndPoll(
       model,
       inputFor(input, resolved),
@@ -233,18 +280,13 @@ export const falImageProvider: ImageProvider = {
 
 export const falVideoProvider: VideoProvider = {
   provider: "fal",
+  supportsImageToVideo: true,
   async generateVideo(
     input: VideoGenerateInput,
     resolved: ResolvedProvider,
     ctx: ProviderCallContext,
   ): Promise<VideoGenerateOutput> {
-    const model =
-      input.model ??
-      configString(
-        resolved,
-        "model",
-        "fal-ai/wan/v2.2-5b/text-to-video",
-      )!;
+    const model = falVideoModelFor(input, resolved);
     const { result, requestId } = await submitAndPoll(
       model,
       inputFor(input, resolved),
@@ -274,7 +316,10 @@ export const falVideoProvider: VideoProvider = {
       usage: {
         unit: "second",
         outputUnits: input.durationSeconds,
-        metadata: { model },
+        metadata: {
+          model,
+          mode: input.image ? "image-to-video" : "text-to-video",
+        },
       },
     };
   },
